@@ -1,3 +1,4 @@
+// @vitest-environment node
 // ── Run-scoped scan stage feed ────────────────────────────────────────────────
 // The Scan Inspector is requireAdmin, so whoever STARTED an area scan could never
 // see why it was or wasn't moving. /api/scan/runs/:runId/stages (+ /stream) expose
@@ -26,11 +27,15 @@ let events: typeof import("../../server/scanEvents");
 
 let repSession: string;      // tenant 1, role rep  → must NOT hold scan.submit
 let managerSession: string;  // tenant 1, role manager
+let tenantAdminSession: string;
+let platformSession: string;
+let unscopedSession: string;
 let callingSession: string;  // tenant 1, role calling_rep → NO scan.submit
 let otherTenantSession: string; // tenant 2 admin — full power, wrong tenant
 
 const RUN_A = "run_field_feed_a";     // tenant 1
 const RUN_B = "run_field_feed_b";     // tenant 2
+const RUN_GUARD = "identity-guard-run";
 const RUN_BOUNDED = "run_field_feed_bounded";
 
 // Secret material that must never survive the projection. The full JWT is the
@@ -62,8 +67,12 @@ beforeAll(async () => {
   managerSession = mkSession("Stage Feed Manager", "manager-stage-feed@example.test", "manager", 1);
   callingSession = mkSession("Stage Feed Caller", "caller-stage-feed@example.test", "calling_rep", 1);
   otherTenantSession = mkSession("Tenant B Admin", "admin-b-stage-feed@example.test", "admin", 2);
+  tenantAdminSession = mkSession("Tenant A Admin", "admin-a-stage-feed@example.test", "admin", 1);
+  platformSession = storage.createSession(storage.createUser({ name: "Platform fixture", email: "platform-stage@example.test", role: "admin", active: true, tenantId: null, isSuperAdmin: 1 }).id).id;
+  unscopedSession = storage.createSession(storage.createUser({ name: "Unscoped fixture", email: "unscoped-stage@example.test", role: "super_admin", active: true, tenantId: null, isSuperAdmin: 0 }).id).id;
 
   const { createScanRun } = await import("../../server/scanIntelStore");
+  createScanRun({ id: RUN_GUARD, tenantId: 1, kind: "field", label: "Guard fixture", budget: 1 });
   createScanRun({ id: RUN_A, tenantId: 1, kind: "field", label: "Inman sweep", city: "Inman", state: "SC", budget: 500 });
   createScanRun({ id: RUN_B, tenantId: 2, kind: "field", label: "Other org sweep", city: "Boone", state: "NC", budget: 500 });
   createScanRun({ id: RUN_BOUNDED, tenantId: 1, kind: "field", label: "Bounded sweep", city: "Inman", state: "SC", budget: 5000 });
@@ -95,7 +104,88 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (server) await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  if (server) await new Promise<void>((resolve, reject) => { server.close((e) => (e ? reject(e) : resolve())); server.closeAllConnections(); });
+});
+
+describe("administrator inspector tenant boundary", () => {
+  it("scopes snapshots and timelines and exposes global health only to immutable platform authority", async () => {
+    seedRun(RUN_B); // the same address key now has a newer event in another tenant
+    const own = await request("/api/scan/inspector?tenantId=2", tenantAdminSession);
+    expect(own.status).toBe(200);
+    const body = await own.json();
+    expect(body.rows.length).toBeGreaterThan(0);
+    expect(body.rows.every((row: any) => row.runId !== RUN_B)).toBe(true);
+    expect(Object.keys(body.health)).toEqual(["paused"]);
+    const timeline = await (await request(`/api/scan/inspector/timeline/${encodeURIComponent("field|1-secret-st")}`, tenantAdminSession)).json();
+    expect(timeline.timeline.length).toBeGreaterThan(0);
+    expect(timeline.timeline.every((row: any) => row.runId === RUN_A)).toBe(true);
+    const platform = await (await request("/api/scan/inspector", platformSession)).json();
+    expect(platform.rows.some((row: any) => row.runId === RUN_B)).toBe(true);
+    expect(platform.health).toHaveProperty("tokenPool");
+    expect((await request("/api/scan/inspector", unscopedSession)).status).toBe(403);
+  });
+
+  it.each(["pause", "resume", "stop", "retry-failed"])("denies tenant-admin global %s before changing the shared queue", async action => {
+    const { isScanningPaused } = await import("../../server/scanner");
+    const before = isScanningPaused();
+    const response = await request("/api/scan/inspector/control", tenantAdminSession, { method: "POST", body: JSON.stringify({ action }) });
+    expect(response.status).toBe(403);
+    expect(isScanningPaused()).toBe(before);
+  });
+
+  it("caps diagnostic connections before headers and releases each grant on disconnect", async () => {
+    const { diagnosticSseCaps } = await import("../../server/diagnosticStreamCaps");
+    const baseline = diagnosticSseCaps.activeConnections;
+    const opened: Array<{ ac: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> }> = [];
+    try {
+      for (let i=0; i<diagnosticSseCaps.options.perUser; i++) {
+        const ac = new AbortController();
+        const response = await request(`/api/scan/inspector/stream?runId=${RUN_GUARD}`, tenantAdminSession, { signal: ac.signal });
+        expect(response.status).toBe(200);
+        const reader = response.body!.getReader(); opened.push({ ac, reader }); await reader.read();
+      }
+      const denied = await request("/api/scan/inspector/stream", tenantAdminSession);
+      expect(denied.status).toBe(429); expect(denied.headers.get("content-type")).not.toContain("text/event-stream"); await denied.text();
+    } finally { for (const item of opened) { item.ac.abort(); await item.reader.cancel().catch(() => {}); } }
+    await waitFor(() => diagnosticSseCaps.activeConnections === baseline);
+    expect(diagnosticSseCaps.activeConnections).toBe(baseline);
+  });
+
+  it("rejects foreign runs before opening the inspector stream", async () => {
+    const response = await request(`/api/scan/inspector/stream?runId=${RUN_B}`, tenantAdminSession);
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).not.toContain("text/event-stream");
+    await response.text();
+  });
+
+  it("filters live inspector events and closes after session revocation without leaking a subscription", async () => {
+    const session = storage.createSession(storage.createUser({ name: "Stream admin", email: "inspector-live@example.test", role: "admin", tenantId: 1, active: true }).id).id;
+    const baseline = events.scanEventListenerCount();
+    const ac = new AbortController();
+    const response = await request("/api/scan/inspector/stream", session, { signal: ac.signal });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    let wire = new TextDecoder().decode((await reader.read()).value);
+    expect(wire).toContain("event: snapshot");
+    const base = { address: "1 Live Fixture", city: "Inman", state: "SC", zip: "29349", source: "field", stage: "queued", status: "info", attempt: 1, tsEpoch: Date.now() } as const;
+    try {
+      bus.emitStage({ ...base, addressKey: "foreign-live-fixture", runId: RUN_B });
+      bus.emitStage({ ...base, addressKey: "unowned-live-fixture", runId: null });
+      bus.emitStage({ ...base, addressKey: "own-live-control", runId: RUN_GUARD });
+      while (!wire.includes("own-live-control")) {
+        const { value, done } = await reader.read(); if (done) break;
+        wire += new TextDecoder().decode(value);
+      }
+      expect(wire).toContain("own-live-control");
+      expect(wire).not.toContain("foreign-live-fixture");
+      expect(wire).not.toContain("unowned-live-fixture");
+      storage.deleteSession(session);
+      bus.emitStage({ ...base, addressKey: "revoked-live-fixture", runId: RUN_GUARD });
+      expect(await reader.read()).toEqual({ done: true, value: undefined });
+      await waitFor(() => events.scanEventListenerCount() === baseline);
+      expect(events.scanEventListenerCount()).toBe(baseline);
+    } finally { ac.abort(); await reader.cancel().catch(() => {}); }
+  });
 });
 
 // One address moving through the pipeline, ending in an auth retry whose upstream

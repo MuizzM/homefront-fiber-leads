@@ -85,12 +85,12 @@ describe("the stranded-run probe is driven by the queued set", () => {
   });
 
   it("does not run a correlated subquery once per terminal run", () => {
-    // This is the defect: CORRELATED SCALAR SUBQUERY means one probe per row of
-    // the outer scan, and the outer scan is every terminal run in the table.
-    expect(plan(CURRENT)).not.toContain("CORRELATED SCALAR SUBQUERY");
-    // Proof the old spelling really did, so this test cannot silently pass on a
-    // planner that stopped caring.
-    expect(plan(OLD_CORRELATED)).toContain("CORRELATED SCALAR SUBQUERY");
+    // New SQLite versions flatten EXISTS into a join. It still scans every
+    // terminal run; the queued-set query must use neither form of that plan.
+    expect(plan(CURRENT)).not.toMatch(/CORRELATED SCALAR SUBQUERY|SEARCH t EXISTS|SCAN r\b/);
+    // Keep the old-query control: older planners name the correlated subquery,
+    // while SQLite 3.53 shows the full outer scan plus SEARCH t EXISTS.
+    expect(plan(OLD_CORRELATED)).toMatch(/CORRELATED SCALAR SUBQUERY|SCAN r\b/);
   });
 
   it("drives from scan_run_targets and looks runs up by rowid", () => {

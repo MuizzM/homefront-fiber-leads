@@ -1,3 +1,4 @@
+import { admitDiagnosticStream } from "./diagnosticStreamCaps";
 import type { Express, Request } from "express";
 import type { Middleware } from "./middlewareTypes";
 import { z } from "zod";
@@ -136,6 +137,7 @@ export function registerFiberOperationsRoutes(app: Express, deps: FiberOperation
     const runId = param(req, "id");
     if (!scanService.getRunStatus(runId, tid)) return res.status(404).json({ error: "Job not found" });
     let after = Math.max(0, Number(req.headers["last-event-id"] ?? req.query.after ?? 0) || 0);
+    if (!admitDiagnosticStream(req, res)) return;
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -146,10 +148,12 @@ export function registerFiberOperationsRoutes(app: Express, deps: FiberOperation
         res.write(`id: ${event.sequence}\nevent: ${event.eventType}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     };
-    flush();
     const events = setInterval(flush, 1_000);
     const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
-    req.on("close", () => { clearInterval(events); clearInterval(keepAlive); });
+    const cleanup = () => { clearInterval(events); clearInterval(keepAlive); };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    flush();
   });
 
   app.get("/api/v1/fiber/addresses", read, (req, res) => {

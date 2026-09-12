@@ -1,3 +1,4 @@
+import { activateWork, purgeWork } from "@/lib/workAuthority";
 // RTL tests for the CE-2 field coaching engine: drill-card flip, deck grade
 // flow (outbox + optimistic advance), the fully-offline deck from the local
 // corpus, the WhatNext objection lookup, WarmupStrip due count, and the
@@ -82,7 +83,8 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 beforeEach(() => {
-  window.localStorage.clear();
+  purgeWork(); window.localStorage.clear();
+  activateWork({ userId: 7, tenantId: null, teamMemberId: 42 }, "coach-test-session");
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 });
 
@@ -91,7 +93,8 @@ afterEach(async () => {
   // query mid-fetch surfaces as an unhandled rejection in the offline tests.
   await waitFor(() => expect(qc.isFetching()).toBe(0)).catch(() => {});
   // Tear down the singleton outbox so no timer/listener leaks between tests.
-  getTrainingReviewQueue({ ownerKey: 42, post: async () => ({}) }).destroy();
+  getTrainingReviewQueue({ ownerKey: 42, owner: { userId: 7, tenantId: null, teamMemberId: 42 }, post: async () => ({}) }).destroy();
+  purgeWork();
   vi.unstubAllGlobals();
 });
 
@@ -240,7 +243,7 @@ describe("offline-first Coach", () => {
     fireEvent.click(screen.getByTestId("grade-good"));
 
     // The review is durably queued (outbox) even though every fetch fails.
-    const queued = getTrainingReviewQueue({ ownerKey: 42, post: async () => ({}) }).pending();
+    const queued = getTrainingReviewQueue({ ownerKey: 42, owner: { userId: 7, tenantId: null, teamMemberId: 42 }, post: async () => ({}) }).pending();
     expect(queued.some((r) => r.cardId === first.id && r.grade === "good")).toBe(true);
     // And the deck advanced to the next card.
     expect(screen.getByTestId("deck-progress")).toHaveTextContent("2 of 10");

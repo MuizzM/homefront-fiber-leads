@@ -1,6 +1,15 @@
+import { ensureScanCountIntegritySchema } from "./scanCountIntegrity";
 import crypto from "node:crypto";
+import { ensureScopeAuthoritySchema, scopeAuthorityVersion } from "./scopeAuthorityVersion";
+import { ensureScannerReliabilitySchema } from "./scannerReliability";
+import { ensureAssignmentOperationSchema } from "./assignmentOperationStore";
+import { ensureOtpDeliverySchema } from "./otpDeliveryStore";
+import { otpCodeMatches } from "./otpSecrets";
+import { ensureDailyRefreshIndexes } from "./dailyRefreshMetrics";
 import { db, rawDb } from "./db";
 import { withoutSqliteBusyWait } from "./interactiveDb";
+import { SESSION_TTL_MS, SESSION_ABSOLUTE_MAX_MS, sessionTimestamp, sessionWithinLifetime } from "./sessionLifetime";
+export { SESSION_TTL_MS, SESSION_ABSOLUTE_MAX_MS } from "./sessionLifetime";
 import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
 import { streetKeyOf, addressIdentityIssues } from "@shared/addressKey";
 import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
@@ -89,14 +98,8 @@ type LegacyScanFields = { maxDownload?: number | null; isNewDeployment?: boolean
 // SESSION_TTL_MS is therefore "how long you may stay AWAY before signing in
 // again", not "how long a shift may last" — comfortably covering a 24h day.
 // Override per-deployment with SESSION_TTL_HOURS.
-const SESSION_TTL_HOURS = Math.min(720, Math.max(24, Number(process.env.SESSION_TTL_HOURS) || 24 * 7));
-export const SESSION_TTL_MS = SESSION_TTL_HOURS * 60 * 60 * 1000;
 // Hard ceiling measured from login: renewal can extend a session repeatedly,
 // but never past this, so a lost or stolen device eventually falls out.
-export const SESSION_ABSOLUTE_MAX_MS = Math.max(
-  SESSION_TTL_MS,
-  Math.min(365, Math.max(1, Number(process.env.SESSION_ABSOLUTE_MAX_DAYS) || 30)) * 24 * 60 * 60 * 1000,
-);
 // Only rewrite expires_at once it has drifted at least this far, so a burst of
 // knocks costs one write per hour rather than one per request.
 const SESSION_RENEW_SLACK_MS = 60 * 60 * 1000;
@@ -1769,6 +1772,8 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`,
     // The actual freshness predicate uses COALESCE; the live-time index cannot seek it.
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_effective_fresh ON scan_targets(tenant_id, COALESCE(first_seen_fiber_at,first_seen_live_at)) WHERE last_fiber_available=1`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_tenant_checked_jd ON scan_targets(tenant_id, julianday(last_scanned_at), last_scanned_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_tenant_lit_jd ON scan_targets(tenant_id, julianday(first_seen_fiber_at))`,
     `CREATE TABLE IF NOT EXISTS availability_snapshots (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
@@ -1866,6 +1871,7 @@ export function runMigrations() {
     `UPDATE notification_outbox SET kind='primary_candidate_new' WHERE kind='candidate_new'`,
     `UPDATE notification_outbox SET kind='primary_reconfirmed_new' WHERE kind='verified_new'`,
     `CREATE INDEX IF NOT EXISTS idx_outbox_delivery_due ON notification_outbox(kind, status, next_attempt_at, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_outbox_failed_tenant ON notification_outbox(tenant_id,id DESC) WHERE status='failed'`,
     `CREATE INDEX IF NOT EXISTS idx_outbox_fresh_pending_tenant ON notification_outbox(tenant_id, id DESC)
        WHERE kind='fresh_fiber' AND status='pending'`,
     `CREATE TABLE IF NOT EXISTS sweep_jobs (
@@ -2314,6 +2320,7 @@ export function runMigrations() {
     `ALTER TABLE scan_runs ADD COLUMN updated_at TEXT`,
     `ALTER TABLE scan_run_targets ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE scan_run_targets ADD COLUMN next_attempt_at TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_srt_pending_due_run ON scan_run_targets(state,next_attempt_at,run_id) WHERE state IN ('queued','inflight')`,
     `ALTER TABLE scan_run_targets ADD COLUMN last_error_category TEXT`,
     `ALTER TABLE scan_run_targets ADD COLUMN last_error_message TEXT`,
     `CREATE TABLE IF NOT EXISTS fiber_job_events (
@@ -3099,6 +3106,11 @@ export function runMigrations() {
     ) WHERE tenant_id IS NULL`).run();
   } catch (e) { console.warn("[migration] territory_requests tenant backfill:", (e as any)?.message); }
 
+  ensureScopeAuthoritySchema(raw);
+  ensureOtpDeliverySchema(raw);
+  ensureAssignmentOperationSchema(raw);
+  ensureScannerReliabilitySchema(raw);
+  ensureScanCountIntegritySchema(raw);
   bootstrapDefaultTenant(raw);
   // GATE M6: a money invariant that can't build is a FAILED RELEASE, not a
   // quiet warning — the deploy health-gate rolls back instead of running
@@ -3367,6 +3379,7 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
   if (!hasOldUnique && hasIndex) return; // already migrated
 
   const recreateIndexes = () => {
+    ensureDailyRefreshIndexes(raw);
     raw.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_targets_addr_city_state ON scan_targets(lower(trim(address)), lower(trim(city)), upper(trim(state)))`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`);
@@ -3726,8 +3739,8 @@ function localDayStartMs(tenantId: number | undefined | null, nowMs: number): nu
 // and commissionService's raw org-config UPDATE) — never "when the relevant
 // field changed", because a bump that reasons about which fields matter is a
 // bump that will eventually reason wrong. The short TTL is the backstop for
-// writers this process cannot see (another process, a hand-run SQL fix): a
-// stale answer can outlive a bypassed bump by at most a few seconds.
+// writers this process cannot see (another process, a hand-run SQL fix): the
+// persisted permission version also invalidates cross-worker authority changes.
 let tenantConfigVersion = 0;
 
 /** Called by every tenant-config write. Cheap enough that "call it always" is
@@ -3736,20 +3749,22 @@ export function bumpTenantConfigVersion(): void {
   tenantConfigVersion++;
 }
 
-interface TenantConfigEntry { version: number; at: number; tz?: string; openField?: boolean; geo?: GeoConfig }
+interface TenantConfigEntry { authorityVersion: number; version: number; at: number; tz?: string; openField?: boolean; geo?: GeoConfig }
 const TENANT_CONFIG_TTL_MS = 5_000;
 const TENANT_CONFIG_MAX_ENTRIES = 500;
 const tenantConfigCache = new Map<number, TenantConfigEntry>();
 
 function tenantConfigEntry(key: number): TenantConfigEntry {
   const now = Date.now();
+  const authorityVersion = scopeAuthorityVersion(rawDb);
+  if (rawDb.inTransaction) return { authorityVersion, version: tenantConfigVersion, at: now };
   const hit = tenantConfigCache.get(key);
   const age = hit ? now - hit.at : Infinity;
-  if (hit && hit.version === tenantConfigVersion && age >= 0 && age < TENANT_CONFIG_TTL_MS) return hit;
+  if (hit && hit.version === tenantConfigVersion && hit.authorityVersion === authorityVersion && age >= 0 && age < TENANT_CONFIG_TTL_MS) return hit;
   // Full clear on overflow, mirroring territoryScopeCache: entries are only
   // valid for one version anyway, so clever eviction buys nothing.
   if (tenantConfigCache.size >= TENANT_CONFIG_MAX_ENTRIES) tenantConfigCache.clear();
-  const fresh: TenantConfigEntry = { version: tenantConfigVersion, at: now };
+  const fresh: TenantConfigEntry = { authorityVersion, version: tenantConfigVersion, at: now };
   tenantConfigCache.set(key, fresh);
   return fresh;
 }
@@ -5186,8 +5201,8 @@ export class Storage implements IStorage {
     return db.insert(sessions).values({ id, userId, expiresAt, createdAt: new Date().toISOString() }).returning().get();
   }
   getSession(id: string): Session | undefined {
-    const now = new Date().toISOString();
-    return db.select().from(sessions).where(and(eq(sessions.id, id), gt(sessions.expiresAt, now))).get();
+    const session = db.select().from(sessions).where(eq(sessions.id, id)).get();
+    return session && sessionWithinLifetime(session) ? session : undefined;
   }
   /** SLIDING RENEWAL — an app in active use must NEVER expire under the rep.
    * The original TTL was absolute from login, so a session minted 7 days ago
@@ -5201,13 +5216,15 @@ export class Storage implements IStorage {
   touchSession(session: Session): Session {
     try {
       const now = Date.now();
-      const created = Date.parse(session.createdAt ?? "") || now;
+      if (!sessionWithinLifetime(session, now)) return session;
+      const created = sessionTimestamp(session.createdAt);
       const target = Math.min(now + SESSION_TTL_MS, created + SESSION_ABSOLUTE_MAX_MS);
-      const current = Date.parse(session.expiresAt) || 0;
+      const current = sessionTimestamp(session.expiresAt);
       if (target - current <= SESSION_RENEW_SLACK_MS) return session;
       const expiresAt = new Date(target).toISOString();
-      withoutSqliteBusyWait(rawDb, () => db.update(sessions).set({ expiresAt }).where(eq(sessions.id, session.id)).run());
-      return { ...session, expiresAt };
+      const updated = withoutSqliteBusyWait(rawDb, () => db.update(sessions).set({ expiresAt })
+        .where(and(eq(sessions.id, session.id), eq(sessions.expiresAt, session.expiresAt), eq(sessions.createdAt, session.createdAt))).run());
+      return updated.changes ? { ...session, expiresAt } : session;
     } catch {
       return session; // transient write contention — the session is still valid
     }
@@ -5239,9 +5256,9 @@ export class Storage implements IStorage {
     const now = new Date().toISOString();
     const em = email.toLowerCase();
     const otp = db.select().from(otpCodes)
-      .where(and(eq(otpCodes.email, em), eq(otpCodes.code, code),
-        eq(otpCodes.used, false), gt(otpCodes.expiresAt, now))).get();
-    if (!otp) {
+      .where(and(eq(otpCodes.email, em), eq(otpCodes.used, false), gt(otpCodes.expiresAt, now)))
+      .orderBy(desc(otpCodes.id)).get();
+    if (!otp || !otpCodeMatches(otp.code, em, code)) {
       // Wrong/expired guess: count it against the email's live codes and burn them
       // once too many misses accumulate, so the code can't be brute-forced within
       // its window (survives restarts / multi-instance, unlike the in-memory limiter).
@@ -6185,7 +6202,7 @@ export class Storage implements IStorage {
     const where: string[] = [];
     const args: any[] = [];
     if (email) { where.push("email = ?"); args.push(String(email).toLowerCase()); }
-    if (tenantId != null) { where.push("(tenant_id = ? OR tenant_id IS NULL)"); args.push(tenantId); }
+    if (tenantId != null) { where.push("tenant_id = ?"); args.push(tenantId); }
     const sql = `SELECT * FROM login_attempts ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY created_at DESC LIMIT ?`;
     return rawDb.prepare(sql).all(...args, limit) as any[];
   }
@@ -6194,7 +6211,7 @@ export class Storage implements IStorage {
     return rawDb.prepare(
       `SELECT email, COUNT(*) AS attempts, SUM(success) AS successes, MAX(created_at) AS last_at,
               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures
-         FROM login_attempts ${scoped ? "WHERE tenant_id = ? OR tenant_id IS NULL" : ""} GROUP BY email ORDER BY last_at DESC`,
+         FROM login_attempts ${scoped ? "WHERE tenant_id = ?" : ""} GROUP BY email ORDER BY last_at DESC`,
     ).all(...(scoped ? [tenantId] : [])) as any[];
   }
 

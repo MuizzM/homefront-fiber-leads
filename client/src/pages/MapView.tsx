@@ -1,3 +1,4 @@
+import { currentWorkLease, isCurrentWorkLease, workOwner, workRequest } from "@/lib/workAuthority";
 import { useForegroundActivity } from "@/hooks/use-foreground-activity";
 import { ErrorState } from "@/components/ErrorState";
 import {
@@ -1694,7 +1695,8 @@ export default function MapView() {
       });
       exitLasso();
     },
-    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] }); },
+    onError: (e: any) => toast({ title: e.message, description: "Open Operations to recover an interrupted assignment.", variant: "destructive" }),
   });
 
   // Put a lasso assignment back. One-use token, same user, inside the window.
@@ -1713,8 +1715,14 @@ export default function MapView() {
       clearAssignResultTimer();
       assignResultDismissTimer.current = setTimeout(() => setAssignResult(null), 8_000);
     },
-    onError: (e: any) => {
-      // The token is spent on redemption (documented single use), so there is
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] }); },
+    onError: (e: any, token: string) => {
+      if (token.startsWith("durable-")) {
+        setAssignResult(r => r ? { ...r, undoPending: false } : r);
+        toast({ title: "Put back paused", description: "Retry Put back or open Operations to continue the same work.", variant: "destructive" });
+        return;
+      }
+      // The legacy token is spent on redemption (documented single use), so there is
       // no retry to offer - the bar states what happened instead.
       setAssignResult(r => (r ? { ...r, undoPending: false, undoError: String(e?.message ?? "The undo did not complete") } : r));
     },
@@ -3383,6 +3391,7 @@ export default function MapView() {
     // answers, instead of a default-city flash the geolocate has to correct.
     const savedCamera = readPersistedMapCamera();
     const map = new (window as any).mapboxgl.Map({
+        zoomLevelsToOverscale: undefined, // Preserve pre-v6 rendered-feature picking.
       container: el,
       style: basemapStyle(appliedStyleRef.current),
       center: savedCamera?.center ?? ROCKWELL_CENTER,
@@ -3737,7 +3746,7 @@ export default function MapView() {
         });
         const clusterId = features[0]?.properties?.cluster_id;
         if (!clusterId) return;
-        void clusterExpansionZoom(map.getSource("leads-cluster"), clusterId).then((zoom) => {
+        void clusterExpansionZoom(map.getSource("leads-cluster"), clusterId, () => mapRef.current === map).then((zoom) => {
           if (zoom == null) return;
           map.easeTo({
             center: features[0].geometry.coordinates,
@@ -3852,7 +3861,7 @@ export default function MapView() {
         const feature = e.features?.[0];
         const clusterId = feature?.properties?.cluster_id;
         if (clusterId == null) return;
-        void clusterExpansionZoom(map.getSource(SCAN_RESULTS_SOURCE), clusterId).then((zoom) => {
+        void clusterExpansionZoom(map.getSource(SCAN_RESULTS_SOURCE), clusterId, () => mapRef.current === map).then((zoom) => {
           if (zoom != null) map.easeTo({ center: feature.geometry.coordinates, zoom });
         });
       });
@@ -7064,9 +7073,10 @@ export default function MapView() {
   // Lead-level notes: the card owns typing; this owns persistence through the
   // offline-safe, conflict-aware pipeline in lib/leadNotes. Explicit leadId so
   // the card can flush the OUTGOING lead's pending note during a swap.
+  const noteLease = user ? currentWorkLease(workOwner(user)) : null;
   const notePoster = useCallback<NotePoster>(
-    (leadId, body) => apiRequest("PATCH", `/api/leads/${leadId}/notes`, body),
-    [],
+    (leadId, body) => workRequest(noteLease, "PATCH", `/api/leads/${leadId}/notes`, body),
+    [noteLease],
   );
   const handleSaveNote = useCallback(
     async (
@@ -7079,26 +7089,27 @@ export default function MapView() {
         leadId,
         note,
         baseUpdatedAt,
+        noteLease,
       );
-      if (result.status === "saved") {
+      if (result.status === "saved" && isCurrentWorkLease(noteLease)) {
         qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}`] });
         qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] }); // note event just landed
       }
       return result;
     },
-    [notePoster, qc],
+    [notePoster, noteLease, qc],
   );
 
   // Stashed offline notes flush the moment connectivity returns (and once on
   // mount, in case the app reloaded while offline notes were pending).
   useEffect(() => {
     const flush = () => {
-      void flushPendingNotes(notePoster);
+      void flushPendingNotes(notePoster, noteLease);
     };
     flush();
     window.addEventListener("online", flush);
     return () => window.removeEventListener("online", flush);
-  }, [notePoster]);
+  }, [notePoster, noteLease]);
 
   // Stable identity so the memoized card never re-renders for MapView churn.
   const closeSheet = useCallback(() => setSelectedLeadId(null), []);

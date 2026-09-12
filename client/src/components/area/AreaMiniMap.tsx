@@ -68,6 +68,7 @@ export function AreaMiniMap({ polygon, color, status, repId, areaName }: AreaMin
           }
 
           const map = new mapboxgl.Map({
+        zoomLevelsToOverscale: undefined, // Preserve pre-v6 rendered-feature picking.
             container: containerRef.current,
             style: basemapStyle("satellite"),
             bounds: [[w, s], [e, n]],

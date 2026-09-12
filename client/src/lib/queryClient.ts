@@ -1,3 +1,4 @@
+import { setWorkResponseHandler } from "./workAuthority";
 import { MutationCache, QueryCache, QueryClient, QueryFunction, type Mutation } from "@tanstack/react-query";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { signalKnockRecovery } from "@/lib/knockQueue";
@@ -44,6 +45,11 @@ function notifyIfSessionExpired(status: number) {
   // a normal "wrong code", not an expiry, and must NOT trigger a logout.
   if (status === 401 && _sessionId) _onUnauthorized?.();
 }
+
+setWorkResponseHandler(status => {
+  if (status === null) bustInflightGetShare();
+  else notifyIfSessionExpired(status);
+});
 
 export class ApiError extends Error {
   constructor(
@@ -528,6 +534,12 @@ const SESSION_SCOPED_KEY_PREFIXES = [
   // (street, city, zip, do-not-knock) plus the bbox they were fetched for.
   // Both families are written by mapPinsSnapshot.ts; only one was swept.
   "hf.mapWindowSnapshot.",
+  "hf.knockQueue.v2.",
+  "hf.knockDead.v2.",
+  "hf.trainingReviews.v2.",
+  "hf.pendingNotes.v2.",
+  "hfs.fieldTracking.v2.",
+  "hf.trainingLadder.v1.",
   "hf.knockQueue.v1.",   // queued knocks for the signed-out rep
   "hf.knockDead.v1.",    // dead-lettered knocks for the signed-out rep
   // Training review outbox - the one queue cloned from knockQueue whose prefix
@@ -539,6 +551,8 @@ const SESSION_SCOPED_KEY_PREFIXES = [
   "pitch-take:",
 ];
 const SESSION_SCOPED_KEYS = [
+  "hfs.work.quarantine.v1",
+  "hfs.work.owner.v1",
   "hf.pendingNotes.v1",  // stashed lead notes awaiting sync
   // Offline GPS queue (fieldTracking.ts QUEUE_KEY). It is not keyed by
   // identity, so anything unflushed at logout is replayed under the NEXT rep's

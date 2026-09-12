@@ -1,6 +1,20 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
+// This suite owns a synthetic transport/coordinator. Its fleet cooldown must
+// also be isolated: otherwise production-mode cases open the shared cwd DB and
+// another parallel fixture can schedule a real 120-second wait before the mock.
+const fleetBackoff = vi.hoisted(() => ({ failures: 0, lastFailureAt: 0 }));
+vi.mock("../../server/bandwidthGovernor", () => ({
+  getSharedMintBackoff: () => ({ ...fleetBackoff }),
+  noteSharedMintFailure: (at: number) => {
+    fleetBackoff.failures++;
+    fleetBackoff.lastFailureAt = at;
+    return { ...fleetBackoff };
+  },
+  resetSharedMintFailures: () => { fleetBackoff.failures = 0; fleetBackoff.lastFailureAt = 0; },
+}));
+
 const { proxyFetch, rotateProxySession, advanceProxyEgress, setEgressGenerationHook, egressHook } = vi.hoisted(() => {
   // The scanner registers its egress-change callback at IMPORT. clearMocks wipes
   // the call record before every test, so the callback is kept here instead of
@@ -92,6 +106,8 @@ describe("Kinetic scanner transport hardening", () => {
   });
 
   beforeEach(() => {
+    fleetBackoff.failures = 0;
+    fleetBackoff.lastFailureAt = 0;
     proxyFetch.mockReset();
     scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
   });

@@ -132,13 +132,20 @@ describe('leaderboard query and cache contracts', () => {
 
   it('shares moving preset computations through the actual HTTP route', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
-    const sql = vi.spyOn(rawDb, 'prepare');
-    const first = await req('/api/leaderboard?range=7d');
-    expect(first.status).toBe(200); const rows = await first.json();
-    clock.mockReturnValue(NOW + 1_000);
-    const second = await req('/api/leaderboard?range=7d');
-    expect(second.status).toBe(200); expect(await second.json()).toEqual(rows);
-    expect(aggregateCount(sql)).toBe(1);
+    // This request's historical clock must agree with its session lifetime.
+    const lifetime = rawDb.prepare('SELECT created_at,expires_at FROM sessions WHERE id=?').get(fx.admin.session) as { created_at: string; expires_at: string };
+    rawDb.prepare('UPDATE sessions SET created_at=?,expires_at=? WHERE id=?').run(new Date(NOW - 3_600_000).toISOString(), new Date(NOW + 3_600_000).toISOString(), fx.admin.session);
+    try {
+      const sql = vi.spyOn(rawDb, 'prepare');
+      const first = await req('/api/leaderboard?range=7d');
+      expect(first.status).toBe(200); const rows = await first.json();
+      clock.mockReturnValue(NOW + 1_000);
+      const second = await req('/api/leaderboard?range=7d');
+      expect(second.status).toBe(200); expect(await second.json()).toEqual(rows);
+      expect(aggregateCount(sql)).toBe(1);
+    } finally {
+      rawDb.prepare('UPDATE sessions SET created_at=?,expires_at=? WHERE id=?').run(lifetime.created_at, lifetime.expires_at, fx.admin.session);
+    }
   });
 
   it('does not merge distinct custom cutoffs', () => {

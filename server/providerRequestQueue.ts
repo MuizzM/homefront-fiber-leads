@@ -1,3 +1,10 @@
+import { providerAdmissionWaitMs, providerAborted } from "./providerDeadline";
+
+export class LocalAdmissionError extends Error {
+  readonly transient = true;
+  constructor() { super("Local provider admission expired or cancelled; requeue work"); }
+}
+
 export type ProviderRequestPriority = "manual" | "lasso" | "new_build" | "coming_soon" | "discovery" | "expansion" | "recheck" | "market" | "nightly" | "city";
 
 // Five weighted-fair admission CLASSES, top to bottom (see admissionClassOf in the
@@ -62,9 +69,13 @@ interface QueueOptions<T> {
 export interface ProviderRequestOptions {
   source?: ProviderRequestPriority;
   priority?: number;
+  deadlineAt?: number;
+  abort?: () => boolean;
 }
 
 interface Pending<T> {
+  deadlineAt: number;
+  abort?: () => boolean;
   key: string;
   task: () => Promise<T>;
   enqueuedAt: number;
@@ -113,6 +124,7 @@ export class ProviderRequestQueue<T> {
   private lastActivityAt = 0;
   private pausedUntil = 0;
   private sequence = 0;
+  private expiryTimer: ReturnType<typeof setInterval> | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: QueueOptions<T>) {
@@ -133,6 +145,9 @@ export class ProviderRequestQueue<T> {
   }
 
   request(key: string, task: () => Promise<T>, options: ProviderRequestOptions = {}): Promise<T> {
+    if (providerAborted(options.abort)) return Promise.reject(new LocalAdmissionError());
+    const deadlineAt = Math.min(this.now() + providerAdmissionWaitMs(), options.deadlineAt ?? Infinity);
+    if (this.now() >= deadlineAt) return Promise.reject(new LocalAdmissionError());
     const normalizedKey = key.trim().toLowerCase();
     const source = options.source ?? "market";
     const priority = Number.isFinite(options.priority) ? Number(options.priority) : PROVIDER_PRIORITY[source];
@@ -152,21 +167,23 @@ export class ProviderRequestQueue<T> {
         this.pendingDirty = true; // lazy sort at dispatch — never O(n) per enqueue
       }
       this.emit({ type: "deduped", key: normalizedKey, queued: this.pending.length, active: this.active, source });
-      return existing.promise.then(value => this.clone(value));
+      return this.waitForShared(existing, deadlineAt, options.abort).then(value => this.clone(value));
     }
 
+    if (this.pending.length >= 20_000) return Promise.reject(new LocalAdmissionError());
     let resolve!: (value: T) => void;
     let reject!: (error: unknown) => void;
     const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail; });
     const item: Pending<T> = {
       key: normalizedKey, task, enqueuedAt: this.now(), sequence: this.sequence++,
-      priority, source, resolve, reject,
+      priority, source, resolve, reject, deadlineAt, abort: options.abort,
     };
     this.inFlight.set(normalizedKey, { promise, pending: item });
     this.pending.push(item);
     this.pendingDirty = true; // sorted lazily in pump() — bulk loads stay O(n) total
     this.emit({ type: "queued", key: normalizedKey, queued: this.pending.length, active: this.active, priority, source });
     this.pump();
+    this.watchPending();
     return promise.then(value => this.clone(value));
   }
 
@@ -211,6 +228,42 @@ export class ProviderRequestQueue<T> {
 
   clearCache(): void { this.cache.clear(); }
 
+  // Shared callers can stop waiting without releasing the owner's active slot.
+  private waitForShared(entry: InFlight<T>, deadlineAt: number, abort?: () => boolean): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setInterval(() => {
+        if (providerAborted(abort) || (entry.pending && this.now() >= deadlineAt)) {
+          clearInterval(timer); reject(new LocalAdmissionError());
+        } else if (!entry.pending && !abort) clearInterval(timer);
+      }, 100);
+      timer.unref?.();
+      entry.promise.then(value => { clearInterval(timer); resolve(value); }, error => { clearInterval(timer); reject(error); });
+    });
+  }
+  private watchPending(): void {
+    if (this.expiryTimer || !this.pending.length) return;
+    this.expiryTimer = setInterval(() => {
+      const now = this.now(); let keep = 0;
+      const cancellations = new Map<() => boolean, boolean>();
+      const cancelled = (abort?: () => boolean) => {
+        if (!abort) return false;
+        if (!cancellations.has(abort)) cancellations.set(abort, providerAborted(abort));
+        return cancellations.get(abort)!;
+      };
+      // Compact once rather than repeated O(n) removal during mass expiry.
+      // One authority read per shared run per sweep, not per queued address.
+      // Dispatch still checks uncached authority immediately before starting.
+      for (const item of this.pending) {
+        if (now >= item.deadlineAt || cancelled(item.abort)) {
+          this.inFlight.delete(item.key); this.failed++; item.reject(new LocalAdmissionError());
+        } else this.pending[keep++] = item;
+      }
+      this.pending.length = keep;
+      if (!keep && this.expiryTimer) { clearInterval(this.expiryTimer); this.expiryTimer = null; }
+      this.pump();
+    }, 100);
+    this.expiryTimer.unref?.();
+  }
   private pendingDirty = false;
   private sortPending(): void {
     // Lazy ordering: enqueue only marks dirty, so loading a 20k-target sweep costs
@@ -221,7 +274,7 @@ export class ProviderRequestQueue<T> {
   }
 
   private pump(): void {
-    if (this.pending.length === 0) return;
+    if (this.pending.length === 0 || this.active >= this.maxConcurrency) return;
     this.sortPending();
     const now = this.now();
     if (this.pausedUntil > now) {
@@ -236,6 +289,9 @@ export class ProviderRequestQueue<T> {
         return;
       }
       const item = this.pending.shift()!;
+      if (this.now() >= item.deadlineAt || providerAborted(item.abort)) {
+        this.inFlight.delete(item.key); this.failed++; item.reject(new LocalAdmissionError()); continue;
+      }
       const tracked = this.inFlight.get(item.key);
       if (tracked) tracked.pending = null;
       this.active++;
@@ -244,7 +300,7 @@ export class ProviderRequestQueue<T> {
       const waitMs = Math.max(0, startedAt - item.enqueuedAt);
       this.emit({ type: "started", key: item.key, queued: this.pending.length, active: this.active, waitMs, priority: item.priority, source: item.source });
 
-      void item.task().then(value => {
+      void Promise.resolve().then(item.task).then(value => {
         const durationMs = Math.max(0, this.now() - startedAt);
         this.completed++;
         this.totalWaitMs += waitMs;

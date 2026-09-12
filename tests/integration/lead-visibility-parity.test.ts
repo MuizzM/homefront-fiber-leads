@@ -152,3 +152,52 @@ describe("the access predicate and the map SQL answer the same question", () => 
     }
   });
 });
+
+it.each([
+  ["empty", "[]", false], ["other", "[999999]", false], ["numeric-string", '["REP"]', false],
+  ["current", "[REP]", true], ["legacy-null", null, true], ["legacy-invalid", "invalid", true],
+  ["legacy-object", "{}", true],
+])("map SQL and hydrated access agree for %s assignees overriding the old primary", async (_label, value, expected) => {
+  const { repVisibilitySql } = await import("../../shared/leadVisibility");
+  const assignees = typeof value === "string" ? value.replace("REP", String(rep.memberId)) : value;
+  const t = Number(rawDb.prepare("INSERT INTO territories(tenant_id,name,rep_id,assignee_ids,polygon) VALUES(1,?,?,?,'[]')").run(`Parity ${_label}`, rep.memberId, assignees).lastInsertRowid);
+  const lead = storage.createLead({ tenantId: 1, address: `${t + 3000} Parity Lane`, city: "Concord", state: "NC", zip: "28027", assignedRepId: otherRep.memberId, assignedTerritoryId: t } as any);
+  const visible = !!rawDb.prepare(`SELECT id FROM leads WHERE id=? AND ${repVisibilitySql([rep.memberId])}`).get(lead.id);
+  expect(visible).toBe(expected);
+  expect((await get(`/api/leads/${lead.id}`, rep.session)).status === 200).toBe(expected);
+});
+
+it("invalidates both the map ETag and cached body after another connection reclaims a territory", async () => {
+  const { default: Database } = await import("better-sqlite3");
+  const { dbPath } = await import("../../server/db");
+  const writer = new Database(dbPath);
+  const scopedId = leadIdFor.get("in MY area but another rep is the named primary")!;
+  try {
+    const before = await get("/api/leads/map?format=packed", rep.session);
+    const etag = before.headers.get("etag")!;
+    const firstBody = await before.json();
+    const pins = firstBody.pins ?? firstBody.rows;
+    expect(pins.some((p: any) => Number(p.id ?? p[0]) === scopedId)).toBe(true);
+    writer.prepare("UPDATE territories SET assignee_ids='[]' WHERE id=?").run(myArea);
+    const after = await fetch(`${baseUrl}/api/leads/map?format=packed`, { headers: { "x-session-id": rep.session, "if-none-match": etag } });
+    expect(after.status).toBe(200); expect(after.headers.get("etag")).not.toBe(etag);
+    expect(after.headers.get("x-map-cache")).toBe("miss");
+    const afterBody = await after.json();
+    expect((afterBody.pins ?? afterBody.rows).some((p: any) => Number(p.id ?? p[0]) === scopedId)).toBe(false);
+    const unchanged = await fetch(`${baseUrl}/api/leads/map?format=packed`, { headers: { "x-session-id": rep.session, "if-none-match": after.headers.get("etag")! } });
+    expect(unchanged.status).toBe(304);
+  } finally { writer.close(); }
+});
+
+it("never publishes permissions from a transaction that later rolls back", async () => {
+  const { cachedScopeLookup } = await import("../../server/territoryScopeCache");
+  const read = () => cachedScopeLookup("rollback-fixture", () => new Set(rawDb.prepare("SELECT open_field_enabled v FROM tenants WHERE id=1").get().v ? [1] : []));
+  rawDb.exec("UPDATE tenants SET open_field_enabled=0 WHERE id=1");
+  expect(storage.openFieldEnabled(1)).toBe(false); expect([...read()]).toEqual([]);
+  rawDb.exec("BEGIN IMMEDIATE; UPDATE tenants SET open_field_enabled=1 WHERE id=1");
+  try { expect(storage.openFieldEnabled(1)).toBe(true); expect([...read()]).toEqual([1]); }
+  finally { rawDb.exec("ROLLBACK"); }
+  // Reuse the rolled-back version with a different permission value.
+  rawDb.exec("UPDATE tenants SET open_field_enabled=0 WHERE id=1");
+  expect(storage.openFieldEnabled(1)).toBe(false); expect([...read()]).toEqual([]);
+});

@@ -1,3 +1,4 @@
+import { providerAdmissionWaitMs, providerTaskWaitMs, providerAborted } from "./providerDeadline";
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
@@ -1150,6 +1151,7 @@ export async function scanAddress(
   options: AddressScanOptions = {},
 ): Promise<ScanResult> {
   const source = options.source ?? "market";
+  const deadlineAt = Date.now() + providerAdmissionWaitMs();
   const normalizedKey = normalizeKineticAddressKey(address, city, state, zip);
   const distributedKey = crypto.createHash("sha256").update(normalizedKey).digest("hex");
   // Inspector: the address has entered the active check queue (awaiting admission
@@ -1158,14 +1160,14 @@ export async function scanAddress(
   return providerQueue.request(normalizedKey, () => distributedProviderCoordinator.execute(
     distributedKey,
     source,
-    () => scanAddressDirect(address, city, state, zip, source),
+    ownership => scanAddressDirect(address, city, state, zip, source, 0, { ...ownership, abort: options.abort, deadlineAt: Date.now() + providerTaskWaitMs() }),
     {
       cacheable: value => value.apiSource !== "failed" && !value.blocked && value.fiberStatus !== "unknown",
       serialize: value => JSON.stringify(value),
       deserialize: value => JSON.parse(value) as ScanResult,
-      abort: options.abort,
+      abort: options.abort, deadlineAt,
     },
-  ), { source });
+  ), { source, abort: options.abort, deadlineAt });
 }
 
 async function scanAddressDirect(
@@ -1179,7 +1181,13 @@ async function scanAddressDirect(
   // correction block below only fires at depth 0 — so a correction can never
   // trigger another correction (no correction loops).
   correctionDepth = 0,
+  ownership: { deadlineAt?: number; abort?: () => boolean; assertActive?: () => void } = {},
 ): Promise<ScanResult> {
+  const taskDeadline = ownership.deadlineAt ?? Date.now() + providerTaskWaitMs();
+  const assertReady = () => {
+    if (Date.now() >= taskDeadline || providerAborted(ownership.abort)) throw new Error("PROVIDER_TASK_EXPIRED");
+    ownership.assertActive?.();
+  };
   const base: ScanResult = {
     address, city, state, zip,
     lat: null, lng: null,
@@ -1230,7 +1238,7 @@ async function scanAddressDirect(
     // meant one lane meant one residential IP, and DECODO_LANES did nothing.
     const laneCount = egressLaneCount();
     const lane = laneCount > 1 ? (_nextLane = (_nextLane + 1) % laneCount) : undefined;
-    tokenLease = await authorizedTokenPool.lease(tokenAddressKey, lane, laneCount > 1 ? laneCount : undefined);
+    tokenLease = await authorizedTokenPool.lease(tokenAddressKey, lane, laneCount > 1 ? laneCount : undefined, { deadlineAt: taskDeadline, abort: ownership.abort });
   } catch (err: any) {
     // No authorized session/token could be obtained — this is NOT a Search-API
     // error, so we fail CLOSED (unresolved), never requeue-loop with no session.
@@ -1246,6 +1254,7 @@ async function scanAddressDirect(
   const searchStart = Date.now();
   try {
     emit("searching", { status: "info", sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4) });
+    assertReady();
     const res = await proxyFetch(KFS_SCAN_URL, {
       method: "POST",
       headers: providerHeaders({
@@ -1256,7 +1265,7 @@ async function scanAddressDirect(
         "Origin": KFS_ORIGIN,
       }),
       body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(5_000, taskDeadline - Date.now()))),
     // THE PAIR, MADE REAL. The lane is chosen by the TOKEN SLOT this check
     // leased, so this token always leaves from its own residential IP and spends
     // its own 20-check budget. Without it every concurrent check shares one IP
@@ -1450,7 +1459,7 @@ async function scanAddressDirect(
               detail: `applied address suggestion: ${maskSuggestedAddress(cAddress, cCity, cState, cZip)} (${selection.reason})`,
             });
             // SAME transport, SAME authorized-token + proxyFetch path; depth+1 bounds it.
-            const corrected = await scanAddressDirect(cAddress, cCity, cState, cZip, source, correctionDepth + 1);
+            const corrected = await scanAddressDirect(cAddress, cCity, cState, cZip, source, correctionDepth + 1, { ...ownership, deadlineAt: taskDeadline });
             // A conclusive correction may be adopted only when it represents the
             // SAME canonical address. A materially different suggestion needs an
             // atomic scan-target identity migrate/merge that does not exist yet;

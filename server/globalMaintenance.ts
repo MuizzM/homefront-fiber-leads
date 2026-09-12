@@ -2,6 +2,10 @@ import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { rawDb } from "./db";
 import { interactiveTransaction, retrySqliteOperation } from "./interactiveDb";
 import { structuredLog } from "./structuredLog";
+import { drainOtpDeliveries } from "./otpDeliveryWorker";
+import { purgeAssignmentReceipts, assignmentReceiptCleanupDue } from "./assignmentOperationStore";
+import { purgeOtpDeliveryReceipts } from "./otpDeliveryStore";
+import { purgeTerminalScannerProgress } from "./scannerReliability";
 
 /** One bounded, atomic delete; a quiet tick takes no writer lock. */
 export function purgeExpiredAuthBatch(table: "sessions" | "otp_codes", nowIso: string): number {
@@ -21,6 +25,7 @@ export async function startGlobalMaintenance(isClusterWorker: boolean): Promise<
   const { nextBatch } = await import("./domainEventStore");
   const stopCalling = await startCallingMaintenance();
   let stopped = false;
+  const otpStop = new AbortController();
   const timers: ReturnType<typeof setInterval>[] = [];
   const install = (name: string, intervalMs: number, work: () => Promise<void>) => {
     let running = false;
@@ -37,6 +42,22 @@ export async function startGlobalMaintenance(isClusterWorker: boolean): Promise<
     timer.unref();
     timers.push(timer);
   };
+
+  install("auth.delivery_drain", 2_000, async () => {
+    await drainOtpDeliveries(rawDb, { signal: otpStop.signal });
+  });
+
+  install("scanner.progress_cleanup", 60_000, async () => {
+    await purgeTerminalScannerProgress(rawDb);
+    const cutoff = Date.now() - 30 * 86400_000;
+    if (rawDb.prepare("SELECT 1 FROM scanner_count_checks WHERE checked_at<? LIMIT 1").get(cutoff))
+      await retrySqliteOperation(rawDb, () => rawDb.prepare("DELETE FROM scanner_count_checks WHERE run_id IN (SELECT run_id FROM scanner_count_checks WHERE checked_at<? LIMIT 500)").run(cutoff));
+  });
+
+  install("reliability.receipt_cleanup", 60_000, async () => {
+    await retrySqliteOperation(rawDb, () => purgeOtpDeliveryReceipts(rawDb));
+    if (assignmentReceiptCleanupDue(rawDb)) await interactiveTransaction(rawDb, () => purgeAssignmentReceipts(rawDb));
+  });
 
   install("incentives.drain", 30_000, async () => {
     let processed = 0, awarded = 0, reversed = 0;
@@ -76,6 +97,7 @@ export async function startGlobalMaintenance(isClusterWorker: boolean): Promise<
 
   return () => {
     stopped = true;
+    otpStop.abort();
     timers.forEach(clearInterval);
     stopCalling();
   };

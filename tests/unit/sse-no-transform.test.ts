@@ -30,6 +30,7 @@ function walk(dir: string): string[] {
 // res.set({...}) block or consecutive res.setHeader calls), so a small window
 // around the declaration is enough to find the opt-out without parsing TS.
 const WINDOW = 8;
+const SSE_DECLARATION = /(?:["']Content-Type["']\s*[:,]\s*["']text\/event-stream|\.type\(\s*["']text\/event-stream)/i;
 
 // Match the DIRECTIVE inside an actual Cache-Control value, never a mention of
 // the word. An earlier version of this test searched the window for the bare
@@ -45,6 +46,12 @@ function isProse(line: string): boolean {
 }
 
 describe("SSE responses are never compressed", () => {
+  it("recognizes header declarations without treating comparisons as endpoints", () => {
+    expect(SSE_DECLARATION.test('res.setHeader("Content-Type", "text/event-stream");')).toBe(true);
+    expect(SSE_DECLARATION.test('"Content-Type": "text/event-stream; charset=utf-8"')).toBe(true);
+    expect(SSE_DECLARATION.test('res.type("text/event-stream")')).toBe(true);
+    expect(SSE_DECLARATION.test('res.getHeader("Content-Type").startsWith("text/event-stream")')).toBe(false);
+  });
   it("every text/event-stream handler sets Cache-Control: no-transform", () => {
     const offenders: string[] = [];
     let declarations = 0;
@@ -52,7 +59,7 @@ describe("SSE responses are never compressed", () => {
     for (const file of walk("server")) {
       const lines = readFileSync(file, "utf8").split("\n");
       lines.forEach((line, i) => {
-        if (!line.includes("text/event-stream")) return;
+        if (!SSE_DECLARATION.test(line)) return;
         // Skip mentions in prose and in negative assertions about the type.
         if (isProse(line)) return;
         declarations++;

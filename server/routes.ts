@@ -1,3 +1,14 @@
+import { scopeAuthorityVersion } from "./scopeAuthorityVersion";
+import { admitDiagnosticStream } from "./diagnosticStreamCaps";
+import { requestSessionCurrent } from "./recoveryAuthority";
+import { readSessionAuthority, sameSessionIdentity } from "./sessionAuthority";
+import { guardSessionStream } from "./streamSessionGuard";
+import { canReadTenantJob } from "./tenantJobAccess";
+import { recoverySnapshot, discardDelivery } from "./reliabilityRecovery";
+import * as durableAssignment from "./assignmentOperationStore";
+import { reliableOtpEnabled, reliabilityEnabled } from "./reliabilityFeatures";
+import { assertReliableOtpReady, otpSender } from "./otpDeliveryWorker";
+import { issueDurableOtp } from "./otpDeliveryStore";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
@@ -27,7 +38,7 @@ import {
 } from "./territoryPass";
 import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
 import { rawDb } from "./db";
-import { interactiveTransaction, withoutSqliteBusyWait } from "./interactiveDb";
+import { interactiveTransaction, retrySqliteOperation, isSqliteContention, withoutSqliteBusyWait } from "./interactiveDb";
 import {
   emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
   type LeadEvent, type LeadEventType,
@@ -368,6 +379,12 @@ function otpMessage(to: string, code: string, name: string) {
   };
 }
 
+function durableOtpMessage(to: string, code: string, name: string) {
+  const logo = logoAttachment();
+  return { ...otpMessage(to, code, name), from: otpSender(),
+    attachments: logo ? [{ filename: logo.filename, content: fs.readFileSync(logo.path).toString("base64"), contentId: logo.cid }] : [] };
+}
+
 async function sendOtpEmail(to: string, code: string, name: string): Promise<"email" | "console"> {
   const message = otpMessage(to, code, name);
   // 1) Resend HTTPS API (port 443), PRODUCTION ONLY. Hosts routinely block
@@ -425,14 +442,21 @@ async function sendOtpViaSmtp(message: ReturnType<typeof otpMessage>) {
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.headers["x-session-id"] as string;
   if (!token) return res.status(401).json({ error: "Not authenticated" });
-  const session = storage.getSession(token);
-  if (!session) return res.status(401).json({ error: "Session expired" });
-  const user = storage.getUserById(session.userId);
-  if (!user || !user.active) return res.status(401).json({ error: "User not found" });
+  const authority = readSessionAuthority(rawDb, token);
+  if (!authority) return res.status(401).json({ error: "Session expired" });
+  const { session, user } = authority;
+  if (!user.active) return res.status(401).json({ error: "User not found" });
   // Keep an actively-used session alive: every authenticated request slides the
   // expiry forward, so a rep mid-shift is never signed out under their own taps.
   storage.touchSession(session);
   (req as any).user = user;
+  guardSessionStream(res, () => {
+    const current = readSessionAuthority(rawDb, token);
+    if (!current || !sameSessionIdentity(user, current.user)) return false;
+    if (!current.user.isSuperAdmin && current.user.tenantId != null
+        && ORG_BLOCKING_STATUSES.has(String(current.organizationStatus ?? "active").toLowerCase())) return false;
+    return pathAllowedWhileGated(req.path) || !isUserTrainingGated(current.user);
+  });
   // The training gate rides HERE rather than being registered separately,
   // because every authenticated route in the app reaches auth through this
   // function (directly, or via requireAdmin/requireTeamLead/requireManager/
@@ -443,7 +467,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   // The org-status gate rides the same choke point, and runs FIRST: an org that
   // has been suspended stops being able to use the app whether or not the person
   // holding the session has finished training.
-  return orgStatusGate(req, res, () => trainingGate(req, res, next));
+  return orgStatusGate(req, res, () => trainingGate(req, res, next), authority.organizationStatus);
 }
 
 // ── Organization status gate ────────────────────────────────────────────────
@@ -457,10 +481,8 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 // different column (`tenant_billing.state`) and is NEVER a gate here — see the
 // owner directive on requireScanningAllowed.
 //
-// Fail-OPEN on an internal error, for the same reason the training gate does: a
-// bug in this lookup must never lock an entire floor out of the app mid-shift.
-// A cancelled org retaining access for an hour is a far smaller problem than
-// every live org losing the app at once.
+// The session authority join already supplies organization status. Reuse it
+// here rather than loading the full tenant row on every authenticated request.
 const ORG_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["cancelled", "suspended"]);
 
 // The org gate gets its OWN allowlist rather than borrowing the training gate's.
@@ -480,7 +502,7 @@ const orgGateAllows = (path: string): boolean => {
   return ORG_GATE_ALLOWED_PREFIXES.some(prefix => p === prefix || p.startsWith(`${prefix}/`));
 };
 
-function orgStatusGate(req: Request, res: Response, next: NextFunction) {
+function orgStatusGate(req: Request, res: Response, next: NextFunction, organizationStatus: string | null) {
   const user = (req as any).user;
   if (!user) return next();
   // The platform owner administers organizations from outside all of them —
@@ -489,18 +511,12 @@ function orgStatusGate(req: Request, res: Response, next: NextFunction) {
   // Never trap a signed-in person without a route to read who they are, see the
   // notice, or sign out — but nothing wider than that (see ORG_GATE_ALLOWED_PREFIXES).
   if (orgGateAllows(req.path)) return next();
-  try {
-    const tenant = storage.getTenantById(user.tenantId);
-    const status = String(tenant?.status ?? "active").toLowerCase();
-    if (!ORG_BLOCKING_STATUSES.has(status)) return next();
-    return res.status(403).json({
-      error: "This organization is no longer active. Contact your administrator.",
-      code: "ORGANIZATION_INACTIVE",
-    });
-  } catch (e: any) {
-    console.warn("[org-status-gate] check failed, allowing through:", e?.message);
-    return next();
-  }
+  const status = String(organizationStatus ?? "active").toLowerCase();
+  if (!ORG_BLOCKING_STATUSES.has(status)) return next();
+  return res.status(403).json({
+    error: "This organization is no longer active. Contact your administrator.",
+    code: "ORGANIZATION_INACTIVE",
+  });
 }
 
 // ── Training gate ───────────────────────────────────────────────────────────
@@ -1347,7 +1363,7 @@ interface AssignUndoEntry {
    *  deliberately re-assigned to the SAME rep after this write (an ABA) is
    *  left alone instead of silently reverted to its pre-lasso owner. */
   appliedAt: string | null;
-  prior: Array<{ id: number; assignedRepId: number | null; assignedBy: string | null; assignedAt: string | null; unassignedAt: string | null }>;
+  prior: Array<{ id: number; assignedRepId: number | null; assignedBy: string | null; assignedAt: string | null; unassignedAt: string | null; assignmentVersion: number }>;
   expiresAt: number;
 }
 const assignUndo = new Map<string, AssignUndoEntry>();
@@ -2322,7 +2338,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // (scan runner, nightly cron) — not just this process's own mutations. Without
     // it, a browser holding the pre-scan ETag would 304 forever and never see the
     // new leads. The in-memory epoch stays for instant same-process busts.
-    const dbVer = storage.getLeadsDataVersion(tid);
+    const dbVer = `${storage.getLeadsDataVersion(tid)}.${scopeAuthorityVersion(rawDb)}`;
     const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}.${dbVer}`;
     const etag = `W/"pins-${format}-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}${viewKey}-${ver}"`;
     // This endpoint overrides the global no-store policy with private no-cache:
@@ -2375,16 +2391,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.flushHeaders();
     clients.add(res);
     _leadMapStreams.set(tenantId, clients);
-    res.write(`event: ready\ndata: {}\n\n`);
     const heartbeat = setInterval(() => {
       if (!res.writableEnded) { try { res.write(": keepalive\n\n"); } catch { res.end(); } }
     }, 25_000);
     heartbeat.unref();
-    req.on("close", () => {
+    const cleanup = () => {
       clearInterval(heartbeat);
       clients.delete(res);
       if (!clients.size) _leadMapStreams.delete(tenantId);
-    });
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    res.write(`event: ready\ndata: {}\n\n`);
   });
 
   // ── Per-lead live stream (FIELD-facing) ─────────────────────────────────────
@@ -2472,20 +2490,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const send = (event: string, data: unknown, id?: string) => {
       // The id line goes FIRST so a browser that drops mid-frame never records a
       // cursor for an event it did not finish reading.
-      if (id) res.write(`id: ${id}\n`);
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      res.write(`${id ? `id: ${id}\n` : ""}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
     // The subscriber's scope roster and open-field flag are resolved ONCE at
     // connect and reused per event, re-resolved only when the version stamp
     // moves (team write / tenant-config write). The predicate itself is the
     // same repCanAccessLead chain; territoryIdsForScope keeps its own
-    // territory-write stamp. Staleness beyond the stamps stays bounded by the
-    // existing safety net: the data-free map-changed ping + ETag poll re-apply
-    // full scoping on every refetch.
+    // territory-write stamp. Persisted triggers also invalidate both caches
+    // when another worker or a raw SQL writer changes permission metadata.
     let accessVersion = -1;
     let accessRosterEpoch = -1;
+    let accessAuthorityVersion = -1;
     let accessScope: number | number[] | undefined;
     let accessOpenField = false;
     const deliver = (evt: LeadEvent) => {
@@ -2498,11 +2514,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // a lead keeps streaming a moved rep's doors for the life of the
       // connection, and this scope is authority, not decoration.
       const rosterEpoch = storage.teamRosterEpoch();
-      if (accessVersion !== streamAccessVersion || accessRosterEpoch !== rosterEpoch) {
+      const authorityVersion = scopeAuthorityVersion(rawDb);
+      if (accessVersion !== streamAccessVersion || accessRosterEpoch !== rosterEpoch || accessAuthorityVersion !== authorityVersion) {
+        const nextScope = leadVisibilityScope(user);
+        const nextOpenField = storage.openFieldEnabled(user?.tenantId);
+        accessScope = nextScope;
+        accessOpenField = nextOpenField;
+        // Publish only after every read succeeds, using the starting version.
+        accessAuthorityVersion = authorityVersion;
         accessVersion = streamAccessVersion;
         accessRosterEpoch = rosterEpoch;
-        accessScope = leadVisibilityScope(user);
-        accessOpenField = storage.openFieldEnabled(user?.tenantId);
       }
       if (accessScope !== undefined) {
         if (!evt.lead) return;
@@ -2540,6 +2561,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // connection ends before any lead frame does.
     send("ready", { epoch, since: `${epoch}.${cursor}`, resync });
     for (const evt of replay) deliver(evt);
+    if (res.writableEnded || res.destroyed) return;
 
     // Subscribing AFTER the replay is race-free without a buffer: emitLeadEvent
     // and this handler are both synchronous, so nothing can be emitted between
@@ -2548,7 +2570,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const unsub = onLeadEvent((evt) => {
       if (evt.seq <= cursor) return;
       cursor = evt.seq;
-      try { deliver(evt); } catch { /* socket gone; the close handler cleans up */ }
+      try { deliver(evt); } catch { res.destroy(); } // unreadable scope fails closed
     });
 
     // ── Team announcements ride THIS connection ─────────────────────────────
@@ -3719,31 +3741,48 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     correlationId: e.addressKey,
     ts: typeof e.tsEpoch === "number" ? new Date(e.tsEpoch).toISOString() : undefined,
   });
-  const inspectorScope = (req: any) => {
+  const inspectorRunOwner = rawDb.prepare("SELECT 1 FROM scan_runs WHERE id=? AND tenant_id=?");
+  const inspectorScope = (req: any, res: Response) => {
     const city = typeof req.query.city === "string" ? req.query.city.trim().slice(0, 120) : "";
     const stateRaw = typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
     const state = /^[A-Z]{2}$/.test(stateRaw) ? stateRaw : "";
     const runId = typeof req.query.runId === "string" ? req.query.runId.trim().slice(0, 160) : "";
-    return { city: city || null, state: state || null, runId: runId || null };
+    const tenantId = req.user?.isSuperAdmin === 1 ? undefined : Number(req.user?.tenantId);
+    if (tenantId !== undefined && (!Number.isSafeInteger(tenantId) || tenantId <= 0)) {
+      res.status(403).json({ error: "Organization membership required" });
+      return null;
+    }
+    if (runId && tenantId !== undefined && !inspectorRunOwner.get(runId, tenantId)) {
+      res.status(404).json({ error: "Run not found" });
+      return null;
+    }
+    return { city: city || null, state: state || null, runId: runId || null, tenantId };
   };
-  const eventMatchesInspectorScope = (evt: any, scope: ReturnType<typeof inspectorScope>) =>
+  const inspectorHealthFor = (req: Request) => (req as any).user?.isSuperAdmin === 1
+    ? inspectorHealth() : { paused: isScanningPaused() };
+  const eventMatchesInspectorScope = (evt: any, scope: NonNullable<ReturnType<typeof inspectorScope>>) =>
     (!scope.runId || evt.runId === scope.runId)
     && (!scope.city || String(evt.city ?? "").trim().toLowerCase() === scope.city.toLowerCase())
-    && (!scope.state || String(evt.state ?? "").trim().toUpperCase() === scope.state);
+    && (!scope.state || String(evt.state ?? "").trim().toUpperCase() === scope.state)
+    && (scope.tenantId === undefined || (evt.runId && !!inspectorRunOwner.get(evt.runId, scope.tenantId)));
   app.get("/api/scan/inspector", requireAdmin, (req, res) => {
-    const scope = inspectorScope(req);
+    const scope = inspectorScope(req, res);
+    if (!scope) return;
     const limit = Math.min(500, Math.max(10, Number(req.query.limit) || 200));
     const snap = getInspectorSnapshot({ ...scope, limit });
-    res.json({ ...snap, scope, rows: (snap.rows as any[])?.map(withCorrelation) ?? snap.rows, health: inspectorHealth() });
+    res.json({ ...snap, scope, rows: (snap.rows as any[])?.map(withCorrelation) ?? snap.rows, health: inspectorHealthFor(req) });
   });
 
   app.get("/api/scan/inspector/timeline/:key", requireAdmin, (req, res) => {
-    res.json({ correlationId: String(req.params.key), timeline: getAddressTimeline(String(req.params.key), 80).map(withCorrelation) });
+    const scope = inspectorScope(req, res);
+    if (!scope) return;
+    res.json({ correlationId: String(req.params.key), timeline: getAddressTimeline(String(req.params.key), 80, scope).map(withCorrelation) });
   });
 
   // SSE — streams each stage event as it happens. Never polls static counters.
   app.get("/api/scan/inspector/stream", requireAdmin, (req, res) => {
-    const scope = inspectorScope(req);
+    const scope = inspectorScope(req, res);
+    if (!scope || !admitDiagnosticStream(req, res)) return;
     res.set({
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -3752,25 +3791,30 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
     res.flushHeaders?.();
     const send = (event: string, data: unknown) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     // Initial snapshot so a fresh/refreshed client paints immediately.
-    send("snapshot", { ...getInspectorSnapshot({ ...scope, limit: 200 }), scope, health: inspectorHealth() });
+    send("snapshot", { ...getInspectorSnapshot({ ...scope, limit: 200 }), scope, health: inspectorHealthFor(req) });
+    if (res.writableEnded || res.destroyed) return;
     const unsub = onScanEvent((evt) => {
-      if (eventMatchesInspectorScope(evt, scope)) send("stage", withCorrelation(evt));
+      try {
+        if (eventMatchesInspectorScope(evt, scope)) send("stage", withCorrelation(evt));
+      } catch { res.end(); } // isolate failures from the shared event relay
     });
     // Heartbeat + periodic health so "blocked stage" detection has a clock and the
     // Decodo/token status stays live even when no address is moving.
     const hb = setInterval(() => {
-      try { res.write(`: ping\n\n`); send("health", inspectorHealth()); } catch { /* closed */ }
+      try { send("health", inspectorHealthFor(req)); } catch { /* closed */ }
     }, 5000);
-    req.on("close", () => { clearInterval(hb); unsub(); });
+    const cleanup = () => { clearInterval(hb); unsub(); };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
   });
 
   // Controls — Pause / Resume / Retry failed / Stop. Act on the shared provider
   // admission queue + active runs, so they govern every scan source at once.
   app.post("/api/scan/inspector/control", requireAdmin, async (req: any, res) => {
+    if (req.user?.isSuperAdmin !== 1) return res.status(403).json({ error: "Platform administrator required" });
     const action = String(req.body?.action ?? "");
     try {
       if (action === "pause") { pauseScanning(); }
@@ -3923,16 +3967,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
     res.flushHeaders?.();
     const send = (event: string, data: unknown) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     const snap = getInspectorSnapshot({ runId: run.id, limit: FIELD_STAGE_LIMIT_DEFAULT });
     send("snapshot", { run: fieldSafeRun(run), paused: isScanningPaused(), counters: snap.counters, stages: snap.rows.map(fieldSafeStage) });
+    if (res.writableEnded || res.destroyed) return;
 
     fieldStageStreams++;
-    // The relay is in-process and already fed by the batched persister, so this
-    // adds ZERO database work per event on the scan hot path — it is a filter on
-    // an EventEmitter callback.
+    // Filter unrelated runs before serialization and the session authority
+    // read performed by the response's SSE guard.
     const unsub = onScanEvent((evt) => {
       if (evt.runId !== run.id) return;
       try { send("stage", fieldSafeStage(evt)); } catch { /* socket gone; close handler cleans up */ }
@@ -4008,10 +4051,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ones, across every confirmed NC/SC Kinetic city. Also runs nightly (cron).
   app.post("/api/scan/daily-refresh", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
     void runDailyMarketRefresh(tid(req)).catch(() => {});
-    res.status(202).json(getDailyRefreshStatus());
+    res.status(202).json(getDailyRefreshStatus(tid(req)));
   });
-  app.get("/api/scan/daily-refresh", requireManager, (_req, res) => {
-    res.json(getDailyRefreshStatus());
+  app.get("/api/scan/daily-refresh", requireManager, (req, res) => {
+    res.json(getDailyRefreshStatus(tid(req)));
   });
 
   // Internal use only — not exposed to frontend
@@ -5360,8 +5403,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const job = scanJobs.get(jobId);
     // Tenant guard — mirror GET/DELETE :jobId. Without it any manager could stream
     // another org's live scan results (addresses/coords) by guessing the jobId.
-    const _sseTid = (req as any).user?.tenantId;
-    if (!job || (_sseTid && job.tenantId !== _sseTid)) return res.status(404).json({ error: "Job not found" });
+    if (!job || !canReadTenantJob((req as any).user, job)) return res.status(404).json({ error: "Job not found" });
 
     // SEC-B: bound concurrent streams — per-user AND process-wide — so a
     // hijacked session can't pin the socket table with thousands of streams.
@@ -5431,18 +5473,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
     }
     const timer = setInterval(sendState, 1000);
-    sendState();
-    req.on("close", () => {
+    const cleanup = () => {
       clearInterval(timer);
       clearTimeout(maxLifeTimer);
       sseGrant.grant.release();
-    });
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    sendState();
   });
 
   app.get("/api/scan/:jobId", requireManager, (req, res) => {
     const job = scanJobs.get(qstr(req.params.jobId));
-    const _sjTid = (req as any).user?.tenantId;
-    if (!job || (_sjTid && job.tenantId !== _sjTid)) return res.status(404).json({ error: "Not found" });
+    if (!job || !canReadTenantJob((req as any).user, job)) return res.status(404).json({ error: "Not found" });
     const r = job.results;
     // ?since=N cursor: return only results[N..] — the 400ms poll used to
     // re-download the FULL cumulative array every tick (O(total²) bytes over a
@@ -5467,17 +5510,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.delete("/api/scan/:jobId", requireManager, (req, res) => {
     // Tenant-scoped: only cancel a job in your own org (was globally deletable).
     const job = scanJobs.get(qstr(req.params.jobId));
-    const _tid = (req as any).user?.tenantId;
-    if (!job || (_tid && job.tenantId !== _tid)) return res.status(404).json({ error: "Not found" });
+    if (!job || !canReadTenantJob((req as any).user, job)) return res.status(404).json({ error: "Not found" });
     scanJobs.delete(qstr(req.params.jobId));
     res.json({ success: true });
   });
 
   app.get("/api/scan", requireManager, (req, res) => {
     // Tenant-scoped list (was every tenant's jobs).
-    const _tid = (req as any).user?.tenantId;
     res.json(Array.from(scanJobs.values())
-      .filter(j => _tid == null || j.tenantId === _tid)
+      .filter(j => canReadTenantJob((req as any).user, j))
       .map(j => ({
         id: j.id, city: j.city, zip: j.zip, status: j.status,
         total: j.total, done: j.done, startedAt: j.startedAt, completedAt: j.completedAt,
@@ -6288,6 +6329,111 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(stripProviderIds(updated, user));
   });
 
+  function durableAssignmentAuthority(owner: durableAssignment.AssignmentOwner) {
+    return (repId: number | null, undo: boolean): durableAssignment.AssignmentAuthority => {
+      const actor = storage.getUserById(owner.userId);
+      if (!requestSessionCurrent(rawDb, owner) || !actor?.active || actor.tenantId !== owner.tenantId || !hasCapability(actor.role, "lead.assign")) {
+        throw new durableAssignment.AssignmentOperationError("FORBIDDEN", 403, "Assignment access has changed");
+      }
+      const target = repId == null ? null : storage.getTeamMemberById(repId);
+      if (!undo && repId != null && (!target?.active || target.tenantId !== owner.tenantId || !repInVisibilityScope(actor, repId))) {
+        throw new durableAssignment.AssignmentOperationError("OUT_OF_SCOPE", 403, "That rep is no longer available for this assignment");
+      }
+      return { actorName: actor.name, repName: target?.name ?? null, scope: leadVisibilityScope(actor) as number[] | undefined };
+    };
+  }
+  function durableAssignmentPublisher(user: any, tenantId: number) {
+    let emitted = 0;
+    return (ids: number[]) => {
+      bustMapCache(tenantId);
+      emitLeadChangesBulk("assignment", ids.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)), user, tenantId);
+      emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + ids.length);
+    };
+  }
+  function assignmentFailure(res: Response, error: unknown, op?: durableAssignment.AssignmentOperation) {
+    if (error instanceof durableAssignment.AssignmentOperationError) return res.status(error.status).json({ error: error.message, code: error.code });
+    structuredLog("assignment.recovery_required", { operationId: op?.id ?? null, code: isSqliteContention(error) ? "database_busy" : "assignment_failed" }, "warn");
+    return res.setHeader("Retry-After", "1").status(503).json({ error: "Assignment paused. Retry to continue the same operation.",
+      code: "ASSIGN_INCOMPLETE", operationId: op?.id, updated: op?.updated ?? 0, total: op?.total ?? 0 });
+  }
+  async function tryDurableAssignment(req: Request, res: Response, kind: durableAssignment.AssignmentKind, repId: number | null,
+    resolve: () => { ids: number[]; metadata: object } | { fail: { status: number; payload: unknown } }): Promise<boolean> {
+    const user = (req as any).user;
+    const owner = { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") };
+    const enabled = reliabilityEnabled("IDEMPOTENT_ASSIGNMENT", owner.tenantId);
+    const clientId = typeof req.body?.opId === "string" ? req.body.opId : "";
+    let op: durableAssignment.AssignmentOperation | undefined;
+    try {
+      if (owner.tenantId && clientId) op = durableAssignment.findAssignmentOperation(rawDb, owner, kind, clientId);
+      if (!enabled && !op) return false;
+      durableAssignment.requireAssignmentOwner(owner);
+      if (!/^[\w-]{1,80}$/.test(clientId)) throw new durableAssignment.AssignmentOperationError("OP_ID_REQUIRED", 400, "A valid operation id is required");
+      const requestHash = durableAssignment.assignmentFingerprint(kind, req.body);
+      if (op && op.request_hash !== requestHash) throw new durableAssignment.AssignmentOperationError("OP_REUSED", 409, "That operation id was already used for different work");
+      if (!op) {
+        durableAssignmentAuthority(owner)(repId, false);
+        const selection = resolve();
+        if ("fail" in selection) { res.status(selection.fail.status).json(selection.fail.payload); return true; }
+        op = await durableAssignment.admitAssignmentOperation(rawDb, owner, { kind, clientId, requestHash, repId, ...selection,
+          authorize: () => { durableAssignmentAuthority(owner)(repId, false); } });
+      } else {
+        await interactiveTransaction(rawDb, () => rawDb.prepare(`UPDATE assignment_operations SET replays=replays+1 WHERE id=? AND tenant_id=? AND actor_user_id=?`).run(op!.id, owner.tenantId, owner.userId));
+      }
+      op = await durableAssignment.continueAssignmentOperation(rawDb, owner, op.id, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId));
+      res.json(JSON.parse(op.result!));
+    } catch (error) {
+      if (op) op = durableAssignment.getAssignmentOperation(rawDb, owner, op.id) ?? op;
+      assignmentFailure(res, error, op);
+    }
+    return true;
+  }
+
+  app.get("/api/reliability/recovery", requireCapability("audit.read.org"), (req, res) => {
+    try {
+      const user = (req as any).user;
+      durableAssignment.requireAssignmentOwner({ tenantId: user?.tenantId, userId: user?.id });
+      const snapshot = recoverySnapshot(rawDb, user.tenantId);
+      const enabled = reliabilityEnabled("DEAD_LETTER_UI", user.tenantId) || snapshot.items.length > 0
+        || snapshot.pendingAssignments.length > 0 || snapshot.queue.length > 0 || snapshot.scanners.length > 0;
+      res.json({ enabled, scannerMonitoringEnabled: reliabilityEnabled("SCANNER_HEARTBEAT", user.tenantId), canManage: hasCapability(user.role, "settings.manage.org"), ...snapshot });
+    } catch (error) { assignmentFailure(res, error); }
+  });
+  app.post("/api/reliability/recovery/:category/:id/discard", requireCapability("settings.manage.org"), async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const category = String(req.params.category);
+      if (category !== "login" && category !== "notification") return res.status(400).json({ error: "Invalid recovery category" });
+      res.json(await discardDelivery(rawDb, { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") }, category, String(req.params.id), String(req.body?.reason ?? "")));
+    } catch (error) { assignmentFailure(res, error); }
+  });
+  app.post("/api/reliability/assignments/:id/stop", requireCapability("settings.manage.org"), async (req, res) => {
+    try {
+      const user = (req as any).user;
+      res.json({ stopped: await durableAssignment.stopAssignmentOperation(rawDb, { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") }, String(req.params.id), String(req.body?.reason ?? "")) });
+    } catch (error) { assignmentFailure(res, error); }
+  });
+
+  app.get("/api/leads/assignment-operations", requireCapability("lead.assign"), (req, res) => {
+    try {
+      const user = (req as any).user;
+      res.json({ operations: durableAssignment.listAssignmentOperations(rawDb, { tenantId: user?.tenantId, userId: user?.id }).map(durableAssignment.assignmentOperationSummary) });
+    } catch (error) { assignmentFailure(res, error); }
+  });
+  app.post("/api/leads/assignment-operations/:id/resume", requireCapability("lead.assign"), async (req, res) => {
+    const user = (req as any).user, owner = { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") };
+    let op: durableAssignment.AssignmentOperation | undefined;
+    try {
+      op = durableAssignment.getAssignmentOperation(rawDb, owner, String(req.params.id));
+      if (!op) throw new durableAssignment.AssignmentOperationError("NOT_FOUND", 404, "Assignment not found");
+      if (op.state === "undoing" || op.state === "undone") {
+        const result = await durableAssignment.undoAssignmentOperation(rawDb, owner, op.undo_token!, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId));
+        return res.json(result);
+      }
+      op = await durableAssignment.continueAssignmentOperation(rawDb, owner, op.id, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId));
+      res.json(JSON.parse(op.result!));
+    } catch (error) { assignmentFailure(res, error, op); }
+  });
+
   // ── Bulk assign leads to a rep (lasso selection) ────────────────────────────
   // ── The one assignment writer ───────────────────────────────────────────────
   // WHOLE-TERRITORY ASSIGNMENT. The original per-id loop ran ~3 synchronous
@@ -6341,13 +6487,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // assignment, and a failure leaves whole chunks applied rather than a
       // half-written row.
       const applyChunk = rawDb.transaction(() => {
+        let chunkPrior: AssignUndoEntry["prior"] = [];
         // The rows as they are BEFORE this write, same predicates as the write.
         if (snapshot) {
           const rows = rawDb.prepare(
-            `SELECT id, assigned_rep_id AS assignedRepId, assigned_by AS assignedBy, assigned_at AS assignedAt, unassigned_at AS unassignedAt
+            `SELECT id, assigned_rep_id AS assignedRepId, assigned_by AS assignedBy, assigned_at AS assignedAt, unassigned_at AS unassignedAt, assignment_version AS assignmentVersion
                FROM leads WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
           ).all(...chunk) as AssignUndoEntry["prior"];
-          prior.push(...rows);
+          chunkPrior = rows;
         }
         // Assignment events first — they must see the PRE-update rows, and
         // only for leads this caller is actually allowed to move.
@@ -6363,17 +6510,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // silently and a live event addressed from `chunk` would announce doors
         // that were never touched. One returned row per updated row, so the
         // caller's count is unchanged.
-        return rawDb.prepare(
+        const changed = rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?,
                   unassigned_at = CASE WHEN ? IS NULL THEN datetime('now') ELSE unassigned_at END,
                   updated_at = datetime('now')
             WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}
         RETURNING id`,
         ).all(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk) as Array<{ id: number }>;
+        return { changed, chunkPrior };
       });
       let changed: Array<{ id: number }>;
       try {
-        changed = applyChunk.immediate() as Array<{ id: number }>;
+        const committed = await retrySqliteOperation(rawDb, () => applyChunk.immediate());
+        changed = committed.changed; prior.push(...committed.chunkPrior);
       } catch (err) {
         structuredLog("lead.assign.chunk_failed", { at: i, of: ids.length, updated, error: String((err as Error)?.message ?? err) }, "error");
         incomplete = true;
@@ -6455,6 +6604,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const token = typeof req.body?.token === "string" ? req.body.token : "";
+    if (token.startsWith("durable-")) {
+      try {
+        const owner = { tenantId: tid, userId: user.id, sessionId: String(req.headers["x-session-id"] ?? "") } as durableAssignment.AssignmentOwner;
+        return res.json(await durableAssignment.undoAssignmentOperation(rawDb, owner, token, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId)));
+      } catch (error) { return assignmentFailure(res, error); }
+    }
     const entry = token ? assignUndo.get(token) : undefined;
     if (!entry || entry.expiresAt <= Date.now()) {
       if (token) assignUndo.delete(token);
@@ -6477,14 +6632,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // unassign, which degrades to the original rep-only behaviour.
         const put = rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?, unassigned_at = ?, updated_at = datetime('now')
-            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ? AND assigned_at IS ?
+            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ? AND assigned_at IS ? AND assignment_version=?
         RETURNING id`,
         );
         const event = rawDb.prepare(`INSERT INTO lead_events (lead_id, type, actor, detail, at) VALUES (?, 'assignment', ?, ?, datetime('now'))`);
         const done: number[] = [];
         for (const row of chunk) {
-          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId, entry.appliedAt) as { id: number } | undefined;
-          if (!hit) { skipped++; continue; }
+          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId, entry.appliedAt, row.assignmentVersion + 1) as { id: number } | undefined;
+          if (!hit) continue;
           done.push(hit.id);
           event.run(hit.id, user?.name ?? null, JSON.stringify({ assignedTo: priorName(row.assignedRepId), assignedBy: user?.name ?? null, undo: true }));
         }
@@ -6492,7 +6647,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
       let changed: number[];
       try {
-        changed = restoreChunk.immediate() as number[];
+        changed = await retrySqliteOperation(rawDb, () => restoreChunk.immediate()) as number[];
+        skipped += chunk.length - changed.length;
       } catch (err) {
         // Committed chunks stand; the token is spent (documented single
         // redemption). Tell the caller exactly how far the restore got instead
@@ -6538,6 +6694,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (repId != null && (!Number.isInteger(Number(repId)) || Number(repId) <= 0)) {
       return res.status(400).json({ error: "repId must be a positive integer" });
     }
+    if (await tryDurableAssignment(req, res, "bulk", repId == null ? null : Number(repId), () => ({ ids: leadIds, metadata: {} }))) return;
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     // Tenant: the target rep must belong to the caller's org (the scope check
     // alone passes for admin/manager, whose scope is org-wide) — a foreign
@@ -6547,6 +6704,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (bulkTarget && !bulkTarget.active) {
       return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
     }
+
 
     const { updated, skipped, repName, prior, appliedAt, incomplete } = await applyAssignment(leadIds, repId ?? null, user, tid);
     if (updated > 0) {
@@ -6966,6 +7124,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (repId != null && (!Number.isInteger(repId) || repId <= 0)) {
       return res.status(400).json({ error: "repId must be a positive integer" });
     }
+    if (await tryDurableAssignment(req, res, "selection", repId, () => {
+      const resolved = resolveAssignSelection(user, tid, { ...body, targetRepId: repId });
+      if ("fail" in resolved) return resolved;
+      return { ids: resolved.netIds, metadata: { resolveMs: resolved.resolveMs,
+        alreadyAssignedToTarget: resolved.alreadyTarget, matchedInSelection: resolved.movable.length,
+        ...(resolved.netIds.length === 0 && resolved.alreadyTarget > 0 ? { noChangesNeeded: true } : {}) } };
+    })) return;
     if (repId != null && !repInVisibilityScope(user, repId)) {
       return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     }
@@ -6977,8 +7142,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
     }
 
+
+
     const opId = typeof body.opId === "string" && body.opId.length > 0 && body.opId.length <= 80 ? body.opId : null;
-    const opKey = opId ? `${user.id}:${opId}` : null;
+    const opKey = opId ? `${tid}:${user.id}:${opId}` : null;
     // The op is its BODY, not just its id: replaying a cached response for a
     // different selection under a recycled id would silently answer for work
     // that never ran. Hash the selection-shaping fields; a mismatch refuses.
@@ -8481,9 +8648,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Distinguishing it from a plain expiry also lets the client say why.
     let accessRevoked = false;
     if (token) {
-      const session = storage.getSession(token);
-      if (session) {
-        const u = storage.getUserById(session.userId);
+      const authority = readSessionAuthority(rawDb, token);
+      if (authority) {
+        const u = authority.user;
         // isSuperAdmin ships WITH the user on every hydration. The Central Admin
         // route gated on the email string matched against a SEPARATELY fetched
         // allowlist, so after a refresh the console vanished (or flashed and
@@ -8506,9 +8673,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           };
         } else if (u) {
           accessRevoked = true;
-          // Self-healing: a deactivated account should not keep session rows
-          // alive. Converges even if some future path forgets to revoke.
-          storage.deleteSessionsByUser(u.id);
+          // Status is read-only: an inactive identity is denied immediately,
+          // without waiting for the SQLite writer merely to purge stale rows.
         }
       }
     }
@@ -8571,6 +8737,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "Valid email required" });
     }
     const cleanEmail = email.trim().toLowerCase();
+    const reliable = reliableOtpEnabled(cleanEmail);
+    // This check precedes account lookup, for the same known/unknown response.
+    if (reliable) assertReliableOtpReady();
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
     const prepared = await interactiveTransaction(rawDb, () => {
       const ipCheck = checkRateLimit("request", ipBucketKey(ip), OTP_REQUEST_IP_MAX);
@@ -8585,12 +8754,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
         return {};
       }
+      if (reliable) {
+        const issued = issueDurableOtp(rawDb, user, code => durableOtpMessage(cleanEmail, code, user.name));
+        storage.logLoginAttempt(cleanEmail, "request", true, "code_queued", ip, req.headers["user-agent"] as string, user.tenantId ?? null);
+        return { user, code: issued.code };
+      }
       return { user, code: storage.createOtp(cleanEmail) };
     });
     if (prepared.retryAfter !== undefined) {
       res.setHeader("Retry-After", String(prepared.retryAfter));
       return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(prepared.retryAfter / 60)} minutes.` });
     }
+    if (reliable) return res.json({ sent: true,
+      ...(process.env.NODE_ENV !== "production" && prepared.code ? { developmentCode: prepared.code } : {}) });
     // Identical response for unknown/inactive accounts; never send a message.
     if (!prepared.user || !prepared.code) return res.json({ sent: true, emailDelivered: true });
     const { user, code } = prepared;
@@ -8707,7 +8883,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const email = typeof req.query.email === "string" ? req.query.email.trim().toLowerCase() : "";
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
     // QA GATE FIX (B1): never read another tenant's auth trail.
-    const scope = req.user?.role === "super_admin" ? null : (req.user?.tenantId ?? -1);
+    const scope = req.user?.isSuperAdmin === 1 ? null : (req.user?.tenantId ?? -1);
     try {
       if (req.query.summary === "1") return res.json({ summary: storage.getLoginAttemptSummary(scope) });
       res.json({ attempts: storage.getLoginAttempts(limit, email || undefined, scope) });
@@ -8745,12 +8921,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "Valid name required" });
     if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return res.status(400).json({ error: "Valid email required" });
-    // First admin belongs to the default org (bootstrapped at migration time).
-    const user = storage.createUser({ name: name.trim(), email: email.trim().toLowerCase(), passwordHash: "", role: "admin", active: true, tenantId: getDefaultTenantId() } as any);
-    // Send OTP immediately so admin can log in
-    const code = storage.createOtp(user.email);
-    await sendOtpEmail(user.email, code, user.name);
-    res.json({ sent: true, message: "Admin account created. Check your email for a login code." });
+    const cleanEmail = email.trim().toLowerCase();
+    const reliable = reliableOtpEnabled(cleanEmail);
+    try {
+      if (reliable) assertReliableOtpReady();
+      const prepared = await interactiveTransaction(rawDb, () => {
+        if (!storage.isFirstRun()) return null;
+        const user = storage.createUser({ name: name.trim(), email: cleanEmail, passwordHash: "", role: "admin", active: true, tenantId: getDefaultTenantId() } as any);
+        const code = reliable
+          ? issueDurableOtp(rawDb, user, code => durableOtpMessage(user.email, code, user.name)).code
+          : storage.createOtp(user.email);
+        return { user, code };
+      });
+      if (!prepared) return res.status(403).json({ error: "Setup already completed" });
+      if (!reliable) await sendOtpEmail(prepared.user.email, prepared.code, prepared.user.name);
+      res.json({ sent: true, message: "Admin account created. Check your email for a login code." });
+    } catch (error) { otpUnavailable(res, "setup", error); }
   });
 
   // Admin: list all users

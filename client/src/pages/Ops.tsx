@@ -7,9 +7,11 @@
 // auto-lapsing), and opening the lead record. The workload tab is a
 // distribution to balance by eye - the server says outright it is not a
 // capacity score, and so does this page.
+import { can as hasCapability } from "@shared/capabilities";
 import { useState } from "react";
 import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AssignmentRecovery } from "@/components/AssignmentRecovery";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
@@ -106,7 +108,9 @@ export default function Ops() {
 
   const assignMutation = useMutation({
     mutationFn: async ({ leadIds, repId }: { leadIds: number[]; repId: number }) => {
-      const res = await apiRequest("POST", "/api/leads/bulk-assign", { leadIds, repId });
+      // One request works in both rollout cohorts. Durable interrupted work is
+      // recovered from its receipt; legacy bulk cannot safely retry a lost reply.
+      const res = await apiRequest("POST", "/api/leads/bulk-assign", { leadIds, repId, opId: crypto.randomUUID() });
       return res.json() as Promise<{ updated: number; skipped: number; undoToken?: string; undoExpiresAt?: string }>;
     },
     onSuccess: (data, vars) => {
@@ -118,8 +122,10 @@ export default function Ops() {
       });
       setChecked(new Set());
       invalidateOps();
+      void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] });
     },
-    onError: (e: any) => toast({ title: "Assignment failed", description: String(e?.message ?? "Try again."), variant: "destructive" }),
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] }); },
+    onError: (e: any) => toast({ title: "Assignment paused - check recent assignments", description: String(e?.message ?? "Try again."), variant: "destructive" }),
   });
 
   const undoMutation = useMutation({
@@ -129,6 +135,7 @@ export default function Ops() {
       setLastResult(r => (r ? { ...r, undone: true, text: `${data.restored} put back${data.skipped ? ` · ${data.skipped} left as someone else moved them` : ""}` } : r));
       invalidateOps();
     },
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] }); },
     onError: (e: any) => toast({ title: "Undo failed", description: String(e?.message ?? "The put-back window may have ended."), variant: "destructive" }),
   });
 
@@ -178,6 +185,8 @@ export default function Ops() {
         title="Operations"
         subtitle="What needs attention, with the exact rule behind every queue."
       />
+
+      {hasCapability(user?.role, "lead.assign") && <AssignmentRecovery />}
 
       {/* Triage windows - the knobs the rules read, in plain words. */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm-minus text-muted-foreground">

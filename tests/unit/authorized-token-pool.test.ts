@@ -2,6 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import { AuthorizedTokenPool } from "../../server/authorizedTokenPool";
 
 describe("AuthorizedTokenPool", () => {
+  it("abandons a timed-out shared mint wait without acquiring a late token lease", async () => {
+    let release!: () => void, started!: () => void;
+    const mintStarted = new Promise<void>(resolve => { started = resolve; });
+    const pool = new AuthorizedTokenPool({ maxSize: 1, warmMinimum: 1, refreshMarginMs: 1_000, backgroundMaintenance: false, now: () => Date.now(),
+      mint: () => new Promise(resolve => { started(); release = () => resolve({ token: "eventual", expiresAt: Date.now() + 120_000 }); }) });
+    vi.useFakeTimers();
+    try {
+      const waiting = expect(pool.lease("abandoned", undefined, undefined, { deadlineAt: Date.now() + 30 })).rejects.toThrow("AUTHORIZED_TOKEN_WAIT_EXPIRED");
+      await mintStarted; expect(release).toBeTypeOf("function");
+      await vi.advanceTimersByTimeAsync(30); await waiting;
+      release(); await vi.advanceTimersByTimeAsync(0);
+      expect(pool.snapshot()).toMatchObject({ activeLeases: 0, checksUsed: 0 });
+      const later = await pool.lease("later"); expect(later.token).toBe("eventual"); later.release();
+    } finally { pool.stop(); vi.useRealTimers(); }
+  });
+  it("does not spend address allowance when cancellation arrives just before leasing", async () => {
+    const pool = new AuthorizedTokenPool({ maxSize: 1, warmMinimum: 1, refreshMarginMs: 1_000, mint: vi.fn(), backgroundMaintenance: false });
+    pool.install("ready", Date.now() + 120_000); let checks = 0;
+    await expect(pool.lease("cancelled", undefined, undefined, { abort: () => ++checks > 1 })).rejects.toThrow("AUTHORIZED_TOKEN_WAIT_EXPIRED");
+    expect(pool.snapshot()).toMatchObject({ activeLeases: 0, checksUsed: 0 }); pool.stop();
+  });
+  it("fails closed before token work when a cancellation read fails", async () => {
+    const mint = vi.fn(); const pool = new AuthorizedTokenPool({ maxSize: 1, warmMinimum: 1, refreshMarginMs: 1_000, mint, backgroundMaintenance: false });
+    await expect(pool.lease("cancelled", undefined, undefined, { abort: () => { throw new Error("lost authority"); } })).rejects.toThrow("AUTHORIZED_TOKEN_WAIT_EXPIRED");
+    expect(mint).not.toHaveBeenCalled(); pool.stop();
+  });
   it("uses installed and on-demand tokens without background timers in an HTTP worker", async () => {
     vi.useFakeTimers();
     const mint = vi.fn(async () => ({ token: "demand-token", expiresAt: Date.now() + 120_000 }));

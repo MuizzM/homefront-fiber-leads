@@ -1,3 +1,5 @@
+import { currentWorkLease, isCurrentWorkLease, type WorkLease } from "./workAuthority";
+import { ownedWorkStore } from "./ownedWorkStore";
 // ── Lead-note persistence — local-first, offline-safe, conflict-aware ─────────
 // The card owns typing (optimistic local state, debounced commits); this module
 // owns getting a committed note to the server without ever losing it:
@@ -17,83 +19,70 @@ export type NoteSaveResult =
 export type NotePoster = (leadId: number, body: { notes: string; baseUpdatedAt: string | null }) =>
   Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
 
-interface PendingNote { notes: string; baseUpdatedAt: string | null; at: number }
+interface PendingNote { notes: string; baseUpdatedAt: string | null; at: number; revision: string }
+const store = ownedWorkStore<Record<string, PendingNote>>("hf.pendingNotes.v2.", () => ({}), "hf.pendingNotes.v1");
+const suspendedResult = (): NoteSaveResult => ({ status: "rejected", reason: "Sign in to continue saving notes." });
 
-const STASH_KEY = "hf.pendingNotes.v1";
-
-let memStash: Record<string, PendingNote> | null = null; // storage-blocked fallback
-
-function readStash(): Record<string, PendingNote> {
-  if (memStash) return memStash;
-  try {
-    const raw = localStorage.getItem(STASH_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch { memStash = memStash ?? {}; return memStash; }
+export function stashNote(leadId: number, notes: string, baseUpdatedAt: string | null, lease = currentWorkLease()): void {
+  if (!isCurrentWorkLease(lease)) return;
+  const stash = store.read(lease);
+  stash[String(leadId)] = { notes, baseUpdatedAt, at: Date.now(), revision: crypto.randomUUID() };
+  store.write(lease, stash);
 }
-
-function writeStash(stash: Record<string, PendingNote>): void {
-  if (memStash) { memStash = stash; return; }
-  try { localStorage.setItem(STASH_KEY, JSON.stringify(stash)); }
-  catch { memStash = stash; }
-}
-
-export function stashNote(leadId: number, notes: string, baseUpdatedAt: string | null): void {
-  const stash = readStash();
-  stash[String(leadId)] = { notes, baseUpdatedAt, at: Date.now() }; // last write per lead wins
-  writeStash(stash);
-}
-
 export function pendingNoteCount(): number {
-  return Object.keys(readStash()).length;
+  const lease = currentWorkLease();
+  return lease ? Object.keys(store.read(lease)).length : 0;
+}
+function removeVersion(lease: WorkLease, leadId: number, revision: string): void {
+  if (!isCurrentWorkLease(lease)) return;
+  const stash = store.read(lease);
+  if (stash[String(leadId)]?.revision === revision) { delete stash[String(leadId)]; store.write(lease, stash); }
 }
 
-// One commit attempt. Network failure → durable stash (never lose the note).
+// Persist before dispatch: an uncertain request retains this version through
+// same-owner reauth. A late response cannot clear a newer edit or another owner.
 export async function saveLeadNote(
-  post: NotePoster, leadId: number, notes: string, baseUpdatedAt: string | null,
+  post: NotePoster, leadId: number, notes: string, baseUpdatedAt: string | null, lease = currentWorkLease(),
 ): Promise<NoteSaveResult> {
+  if (!isCurrentWorkLease(lease)) return suspendedResult();
+  stashNote(leadId, notes, baseUpdatedAt, lease);
+  const revision = store.read(lease)[String(leadId)].revision;
   try {
     const res = await post(leadId, { notes, baseUpdatedAt });
+    if (!isCurrentWorkLease(lease)) return suspendedResult();
     if (res.status === 409) {
       const body = await res.json();
+      if (!isCurrentWorkLease(lease)) return suspendedResult();
+      removeVersion(lease, leadId, revision);
       return { status: "conflict", serverNotes: String(body?.serverNotes ?? ""), updatedAt: body?.updatedAt ?? null };
     }
-    // HONESTY FIX: a definitive server rejection (400/403/404 — too-long note,
-    // deleted lead, capability denial) is NOT an offline queue event. Stashing
-    // it retries forever invisibly; tell the truth instead.
     if (res.status === 400 || res.status === 403 || res.status === 404) {
       const body = await res.json().catch(() => ({}));
+      if (!isCurrentWorkLease(lease)) return suspendedResult();
+      removeVersion(lease, leadId, revision);
       return { status: "rejected", reason: String((body as any)?.error ?? `HTTP ${res.status}`) };
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = await res.json();
-    // Landed — clear any stale stash entry for this lead.
-    const stash = readStash();
-    if (stash[String(leadId)]) { delete stash[String(leadId)]; writeStash(stash); }
+    if (!isCurrentWorkLease(lease)) return suspendedResult();
+    removeVersion(lease, leadId, revision);
     return { status: "saved", updatedAt: body?.updatedAt ?? null };
   } catch {
-    stashNote(leadId, notes, baseUpdatedAt);
-    return { status: "queued" };
+    return isCurrentWorkLease(lease) ? { status: "queued" } : suspendedResult();
   }
 }
 
-// Flush everything stashed (called on 'online' and app load). Conflicts during
-// flush resolve server-wins — the rep isn't looking at that card anymore, and
-// the server copy is by definition the newer intentional write.
-export async function flushPendingNotes(post: NotePoster): Promise<number> {
-  const stash = readStash();
-  const ids = Object.keys(stash);
+export async function flushPendingNotes(post: NotePoster, lease = currentWorkLease()): Promise<number> {
+  if (!isCurrentWorkLease(lease)) return 0;
+  const stash = store.read(lease);
   let flushed = 0;
-  for (const id of ids) {
-    const p = stash[id];
+  for (const [id, p] of Object.entries(stash)) {
+    if (!isCurrentWorkLease(lease)) break;
     try {
       const res = await post(Number(id), { notes: p.notes, baseUpdatedAt: p.baseUpdatedAt });
-      if (res.ok || res.status === 409) {
-        const cur = readStash();
-        delete cur[id];
-        writeStash(cur);
-        flushed++;
-      }
-    } catch { /* still offline — keep it stashed */ }
+      if (!isCurrentWorkLease(lease)) break;
+      if (res.ok || res.status === 409) { removeVersion(lease, Number(id), p.revision); flushed++; }
+    } catch { if (!isCurrentWorkLease(lease)) break; }
   }
   return flushed;
 }

@@ -49,9 +49,9 @@ interface ScanInspectorProps {
   scopeLabel?: string;
 }
 interface Health {
-  decodoConnected: boolean; proxySessionId: string; tokenReady: boolean; tokenExpiresIn: number | null;
-  publicIp: string | null; stickyPort: number | null; checksOnThisIp: number; checksPerIp: number;
-  tokenPool: { ready: number; size: number }; paused: boolean;
+  decodoConnected?: boolean; proxySessionId?: string; tokenReady?: boolean; tokenExpiresIn?: number | null;
+  publicIp?: string | null; stickyPort?: number | null; checksOnThisIp?: number; checksPerIp?: number;
+  tokenPool?: { ready: number; size: number }; paused: boolean;
 }
 interface Counters {
   found: number; checked: number; queued: number; checking: number; retrying: number; unresolved: number;
@@ -88,7 +88,8 @@ const TABLE_COLS = "grid grid-cols-[minmax(0,1fr)_10.5rem_5.5rem_4.5rem] items-c
 const TABLE_MIN_W = "min-w-[34rem]";
 
 export default function ScanInspector({ city, state, scopeLabel }: ScanInspectorProps) {
-  const { sessionId } = useAuth();
+  const { sessionId, user } = useAuth();
+  const canControlGlobal = user?.isSuperAdmin === true;
   const { toast } = useToast();
   const [rows, setRows] = useState<Map<string, Row>>(new Map());
   const [counters, setCounters] = useState<Counters | null>(null);
@@ -308,8 +309,9 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-success/25 bg-success/[0.08] text-success" : "border-warning/25 bg-warning/[0.08] text-warning"}`}>
           {connected ? null : <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />} {connected ? "Live" : retryTick > 0 ? "Reconnecting - rows may be stale" : "Connecting…"}
         </span>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-success/25 text-success" : "border-destructive/25 text-destructive"}`}>
-          {health?.decodoConnected ? null : null} Decodo {health?.decodoConnected ? "connected" : "down"}
+        {typeof health?.decodoConnected === "boolean" && <>
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health.decodoConnected ? "border-success/25 text-success" : "border-destructive/25 text-destructive"}`}>
+          Decodo {health.decodoConnected ? "connected" : "down"}
         </span>
         {/* The address the rows below were answered from, and how much of its
             20-check budget is spent. A masked session id alone never told an
@@ -327,6 +329,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground">
            token {health?.tokenReady ? `ready · ${health?.tokenExpiresIn ?? "?"}s` : "none"} · pool {health?.tokenPool?.ready ?? 0}/{health?.tokenPool?.size ?? 0}
         </span>
+        </>}
         {health?.paused && <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/25 bg-warning/[0.08] px-2.5 py-1 text-warning">Paused</span>}
       </div>
 
@@ -377,9 +380,10 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
 
       {/* Controls are intentionally global: the shared provider queue does not
           support a truthful per-city pause. Make that blast radius explicit. */}
-      {scopeLabel && <div className="text-[11px] font-semibold text-warning">All-market controls below affect every running scan, not only {scopeLabel}.</div>}
+      {canControlGlobal && scopeLabel && <div className="text-[11px] font-semibold text-warning">All-market controls below affect every running scan, not only {scopeLabel}.</div>}
       {/* Controls */}
       <div className="flex flex-wrap gap-2">
+        {canControlGlobal && <>
         {health?.paused
           ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-success px-3 py-2 text-[13px] font-semibold text-success-foreground hover:bg-success/90"> Resume</button>
           : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Pause</button>}
@@ -392,6 +396,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         ) : (
           <button onClick={() => setStopArmed(true)} data-testid="inspector-stop" className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-[13px] font-semibold text-destructive hover:bg-destructive/[0.08]"> Stop</button>
         )}
+        </>}
         <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Copy diagnostics</button>
       </div>
 

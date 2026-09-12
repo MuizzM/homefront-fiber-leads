@@ -6,19 +6,25 @@ Columns: **Ready** → **In progress** → **In verification** → **Ready for r
 
 | ID | Priority | Owner lane | State | GitHub work item |
 | --- | --- | --- | --- | --- |
-| FND-01 | P0 | Architecture / Data / Async | In verification | [Verify and ship the first SaaS foundation safeguards](https://github.com/MuizzM/homefront-fiber-leads/issues/218) |
-| ASYNC-01 | P1 | Async / Architecture | Ready | [Make assignment operation receipts durable across workers and restart](https://github.com/MuizzM/homefront-fiber-leads/issues/219) |
+| FND-01 | P0 | Architecture / Data / Async | Released | [Verify and ship the first SaaS foundation safeguards](https://github.com/MuizzM/homefront-fiber-leads/issues/218) |
+| ASYNC-01 | P1 | Async / Architecture | In verification | [Make assignment operation receipts durable across workers and restart](https://github.com/MuizzM/homefront-fiber-leads/issues/219) |
 | ASYNC-02 | P1 | Async / Security | Needs design | [Define tenant-safe notification routing and periodic retry dispatch](https://github.com/MuizzM/homefront-fiber-leads/issues/220) |
 | TEST-01 | P1 | Testing / DX | Ready | [Isolate browser tests before enabling critical-flow CI](https://github.com/MuizzM/homefront-fiber-leads/issues/221) |
-| PERF-01 | P1 | Performance / Data | Ready | [Commit reproducible performance scenarios and calibrated regression budgets](https://github.com/MuizzM/homefront-fiber-leads/issues/222) |
+| PERF-01 | P1 | Performance / Data | In progress | [Commit reproducible performance scenarios and calibrated regression budgets](https://github.com/MuizzM/homefront-fiber-leads/issues/222) |
 | ARCH-01 | P1 | Architecture / Frontend / DX | Ready | [Extract one typed domain workflow without changing business behavior](https://github.com/MuizzM/homefront-fiber-leads/issues/223) |
 | UX-01 | P2 | Design / Frontend | Ready | [Apply the existing design system consistently to role workspaces](https://github.com/MuizzM/homefront-fiber-leads/issues/224) |
 | MAP-01 | P2 | Map / Product | Needs design | [Add explicit offline territory coverage and conflict-safe field recovery](https://github.com/MuizzM/homefront-fiber-leads/issues/225) |
 | AI-01 | P2 | AI / Security / Product | Needs design | [Establish AI privacy, cost and evaluation contracts around existing assistance](https://github.com/MuizzM/homefront-fiber-leads/issues/226) |
-| OBS-01 | P1 | Observability / Testing | Ready | [Define measured SLOs and safe request-to-job observations](https://github.com/MuizzM/homefront-fiber-leads/issues/227) |
+| OBS-01 | P1 | Observability / Testing | In progress | [Define measured SLOs and safe request-to-job observations](https://github.com/MuizzM/homefront-fiber-leads/issues/227) |
 | PLAT-01 | P2 | Platform / Data / Architecture | Needs design | [Rehearse capacity and recovery before deciding database or hosting migration](https://github.com/MuizzM/homefront-fiber-leads/issues/228) |
 | DX-01 | P2 | Documentation / Integrator | Ready | [Keep onboarding, API contracts and upgrade evidence reproducible](https://github.com/MuizzM/homefront-fiber-leads/issues/229) |
 | ASYNC-03 | P1 | Async / Testing | Ready | [Characterize import attempt fencing and worker recovery ownership](https://github.com/MuizzM/homefront-fiber-leads/issues/230) |
+
+## Current reliability increment
+
+Foundation PR #231 is released at `02874d194773c2c0f127e9411b1edd7890d83326` ([deployment](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/34244744454)). Branch `feature/reliability-hardening` implements assignment receipts/chunks/versioned undo, encrypted OTP outbox recovery, bounded scanner admission and claim cycles, normalized indexed counts, and tenant-scoped recovery UI. It also contributes reproducible SQL benchmarks and diagnostic queries to PERF-01/OBS-01. Their broader browser budgets, SLO calibration and routing work remain open. The auth outbox does not complete ASYNC-02's separate notification-routing design.
+
+See the [execution record](../.agent/plans/reliability-hardening.md) and [rollout runbook](runbooks/reliability-hardening.md). Production-like staging is awaiting a host; seven complete days of soak and a subsequent 48-hour 10% canary remain required. This increment is not deployed.
 
 ## Prerequisites and acceptance criteria
 

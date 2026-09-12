@@ -3,6 +3,7 @@
 // permission-denial + failure feeds — read from a server read-model over the
 // activity stream. Gated on audit.read.org (manager+).
 
+import { ReliabilityRecovery } from "@/components/ReliabilityRecovery";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -208,6 +209,8 @@ export default function Diagnostics() {
               : <p className="text-[13px] text-muted-foreground italic py-4">No sensitive actions in this window.</p>}
         </div>
       </section>
+
+      <ReliabilityRecovery />
 
       {/* Version + read-model freshness footer */}
       {data && (

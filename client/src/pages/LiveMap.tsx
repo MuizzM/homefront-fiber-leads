@@ -123,6 +123,7 @@ export default function LiveMap() {
       setMapUnavailable(false);
       mgl.accessToken = token;
       mapRef.current = new mgl.Map({
+        zoomLevelsToOverscale: undefined, // Preserve pre-v6 rendered-feature picking.
         container: mapContainer.current,
         style: basemapStyle("dark"),
         center: [-80.4139, 35.5501],

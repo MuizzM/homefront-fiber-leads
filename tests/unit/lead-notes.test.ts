@@ -1,3 +1,4 @@
+import { activateWork, purgeWork } from "../../client/src/lib/workAuthority";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   saveLeadNote, flushPendingNotes, mergeNotes, pendingNoteCount, stashNote,
@@ -15,8 +16,9 @@ const conflict = (body: any) => ({ ok: false, status: 409, json: async () => bod
 
 // The stash is module-level (in-memory fallback when localStorage is absent in
 // the node test env) — drain it so entries never leak between tests.
-beforeEach(async () => {
-  await flushPendingNotes(async () => ok({}));
+beforeEach(() => {
+  purgeWork(); localStorage.clear();
+  activateWork({ userId: 10, tenantId: 1, teamMemberId: 20 }, "notes-test-session");
 });
 
 describe("saveLeadNote", () => {

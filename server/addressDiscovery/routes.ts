@@ -1,3 +1,4 @@
+import { admitDiagnosticStream } from "../diagnosticStreamCaps";
 import crypto from "node:crypto";
 import type { Express, Request, Response } from "express";
 import type { Middleware } from "../middlewareTypes";
@@ -807,6 +808,7 @@ export function registerAddressDiscoveryRoutes(
         return res.status(404).json({ error: "Not found" });
     }
     res.status(200);
+    if (!admitDiagnosticStream(req, res)) return;
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -850,9 +852,10 @@ export function registerAddressDiscoveryRoutes(
       if (!events.length) res.write(`: keepalive ${Date.now()}\n\n`);
       (res as any).flush?.();
     };
-    pump();
     const timer = setInterval(pump, 1_000);
     req.on("close", () => clearInterval(timer));
+    res.on("close", () => clearInterval(timer));
+    pump();
   };
 
   app.get(

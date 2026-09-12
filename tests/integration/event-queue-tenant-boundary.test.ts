@@ -14,6 +14,7 @@ let E: typeof import("../../server/domainEventStore");
 let server: Server;
 let origin: string;
 let sequence = 1;
+let adminId: number, sessionId: string;
 const subscriber = "incentives";
 const at = "2026-09-08T12:00:00.000Z";
 
@@ -29,16 +30,18 @@ function event(tenantId: number, cachedTenantId: number | null = tenantId) {
 async function request(path: string, tenant: string, body?: object, role = "admin") {
   return fetch(`${origin}/api/commission/${path}`, {
     method: body ? "POST" : "GET",
-    headers: { "content-type": "application/json", "x-fixture-tenant": tenant, "x-fixture-role": role },
+    headers: { "content-type": "application/json", "x-fixture-tenant": tenant, "x-fixture-role": role, "x-session-id": sessionId },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
 }
 
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-event-tenant-"));
-  const { runMigrations } = await import("../../server/storage");
+  const { runMigrations, storage } = await import("../../server/storage");
   runMigrations();
   ({ rawDb: db } = await import("../../server/db"));
+  adminId = storage.createUser({ name: "Fixture admin", email: "queue-admin@example.invalid", role: "admin", active: true, tenantId: 1 } as any).id;
+  sessionId = storage.createSession(adminId).id;
   E = await import("../../server/domainEventStore");
   Q = await import("../../server/eventQueueOps");
   const { registerCommissionRoutes } = await import("../../server/commissionRoutes");
@@ -46,7 +49,7 @@ beforeAll(async () => {
   app.use(express.json());
   // Auth is a fixture boundary; the real route capability and storage checks run.
   app.use((req, _res, next) => {
-    (req as any).user = { id: null, tenantId: req.header("x-fixture-tenant") === "none" ? null : Number(req.header("x-fixture-tenant")), role: req.header("x-fixture-role") };
+    (req as any).user = { id: adminId, tenantId: req.header("x-fixture-tenant") === "none" ? null : Number(req.header("x-fixture-tenant")), role: req.header("x-fixture-role") };
     next();
   });
   registerCommissionRoutes(app, {

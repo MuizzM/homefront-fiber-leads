@@ -27,6 +27,25 @@ const newUser = (email: string) =>
   storageMod.storage.createUser({ name: "Rep", email, role: "rep" } as any).id;
 
 describe("session lifetime", () => {
+  it("rejects the absolute cap on read even when the stored idle expiry is still in the future", async () => {
+    const s = storageMod.storage.createSession(newUser("absolute-read@example.com"));
+    const createdAt = new Date(Date.now() - storageMod.SESSION_ABSOLUTE_MAX_MS - 1000).toISOString();
+    rawDb.prepare("UPDATE sessions SET created_at=? WHERE id=?").run(createdAt, s.id);
+    expect(storageMod.storage.getSession(s.id)).toBeUndefined();
+    const { readSessionAuthority } = await import("../../server/sessionAuthority");
+    expect(readSessionAuthority(rawDb, s.id)).toBeNull();
+    expect(storageMod.storage.touchSession({ ...s, createdAt }).expiresAt).toBe(s.expiresAt);
+  });
+
+  it("does not renew an expiry changed after the authenticated read", () => {
+    const s = storageMod.storage.createSession(newUser("renew-cas@example.com"));
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    rawDb.prepare("UPDATE sessions SET expires_at=? WHERE id=?").run(expiresAt, s.id);
+    const expired = new Date(Date.now() - 1000).toISOString();
+    rawDb.prepare("UPDATE sessions SET expires_at=? WHERE id=?").run(expired, s.id);
+    storageMod.storage.touchSession({ ...s, expiresAt });
+    expect(storageMod.storage.getSession(s.id)).toBeUndefined();
+  });
   it("keeps valid access responsive when renewal contends with another writer", () => {
     const s = storageMod.storage.createSession(newUser("busy@example.test"));
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();

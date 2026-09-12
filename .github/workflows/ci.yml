@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .node-version
           cache: npm
 
       - name: Install (clean, lockfile-exact)
@@ -59,3 +59,15 @@ jobs:
       #   run: npm run test:e2e:install
       # - name: E2E
       #   run: npm run test:e2e
+
+  runtime-image:
+    name: Production image native smoke
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the production runtime
+        run: docker build --target runtime --tag homefront-runtime-smoke .
+      - name: Verify native SQLite, transactions, backup and workers without network
+        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,noexec,size=64m,mode=1777 --entrypoint node homefront-runtime-smoke script/runtime-smoke.cjs

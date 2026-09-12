@@ -22,10 +22,13 @@
 // growth.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "./auth";
+import { currentWorkLease, isCurrentWorkLease, workOwner, workJson } from "./workAuthority";
+import { appendFieldFix, flushFieldFixes, queuedFieldFixes, type QueuedFix } from "./fieldFixQueue";
 import { shouldAcceptFix, type FixCandidate } from "@shared/repStatus";
 import {
   MAX_ACCURACY_M,
+  MIN_INGEST_GAP_MS,
   PING_INTERVAL_HIDDEN_MS,
   PING_INTERVAL_MOVING_MS,
   PING_INTERVAL_STATIONARY_MS,
@@ -61,26 +64,6 @@ const IDLE: TrackingState = {
   paused: false, canPause: true, retentionDays: 7, clockedIn: false,
 };
 
-/** Queue key. Fixes that could not be sent wait here rather than being lost -
- *  a rep working a basement should not leave a hole in their own shift. */
-const QUEUE_KEY = "hfs.fieldTracking.queue";
-const QUEUE_MAX = 200;
-
-interface QueuedFix { lat: number; lng: number; accuracyM: number | null; capturedAt: string }
-
-function readQueue(): QueuedFix[] {
-  try {
-    const raw = localStorage.getItem(QUEUE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(-QUEUE_MAX) : [];
-  } catch { return []; }
-}
-
-function writeQueue(items: QueuedFix[]): void {
-  try { localStorage.setItem(QUEUE_KEY, JSON.stringify(items.slice(-QUEUE_MAX))); }
-  catch { /* storage full or blocked; the queue is best-effort */ }
-}
-
 /**
  * Arms location sampling only when the server says it may run.
  *
@@ -88,160 +71,131 @@ function writeQueue(items: QueuedFix[]): void {
  * whether they are being tracked and why not when they are not.
  */
 export function useFieldTracking(enabled = true): TrackingRuntime {
+  const { user } = useAuth();
+  const lease = user ? currentWorkLease(workOwner(user)) : null;
   const [state, setState] = useState<TrackingState>(IDLE);
   const [denied, setDenied] = useState(false);
   const [lastSentAt, setLastSentAt] = useState<number | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
-
   const lastFix = useRef<FixCandidate | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stopped = useRef(false);
+  const allowed = useRef(false);
+  const mounted = useRef(false);
+  const refreshVersion = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const live = useCallback(() => mounted.current && enabled && isCurrentWorkLease(lease), [enabled, lease]);
 
   const refresh = useCallback(() => {
-    apiRequest("GET", "/api/live-ops/me")
-      .then((r) => r.json())
-      .then((body) => setState({ ...IDLE, ...body }))
-      .catch(() => setState(IDLE));   // unreachable server means do not sample
-  }, []);
+    if (!live()) return;
+    const version = ++refreshVersion.current;
+    void workJson(lease, "GET", "/api/live-ops/me", undefined).then(body => {
+      if (!live() || version !== refreshVersion.current) return;
+      allowed.current = body?.tracking === true;
+      setState({ ...IDLE, ...body });
+    }).catch(() => {
+      if (!live() || version !== refreshVersion.current) return;
+      allowed.current = false; setState(IDLE);
+    });
+  }, [lease, live]);
 
   useEffect(() => {
-    if (!enabled) return;
-    refresh();
-    // Re-ask on a slow cadence AND whenever the tab comes back, so a shift that
-    // ended on another device stops this one too.
-    const id = setInterval(refresh, 60_000);
+    mounted.current = true; allowed.current = false; lastFix.current = null;
+    setState(IDLE); setLastSentAt(null); setDenied(false); setQueuedCount(queuedFieldFixes(lease));
+    if (enabled && lease) refresh();
+    const stop = () => { allowed.current = false; refreshVersion.current++; if (retryTimer.current) clearTimeout(retryTimer.current); setState(IDLE); };
+    lease?.signal.addEventListener("abort", stop, { once: true });
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    const id = enabled && lease ? setInterval(refresh, 60_000) : null;
     document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
-  }, [enabled, refresh]);
+    return () => {
+      mounted.current = false; allowed.current = false; refreshVersion.current++;
+      if (id) clearInterval(id);
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      lease?.signal.removeEventListener("abort", stop);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [enabled, lease, refresh]);
 
-  /** Send one fix, queueing it if the network is gone. */
-  const send = useCallback(async (fix: QueuedFix) => {
-    try {
-      const res = await apiRequest("POST", "/api/live-ops/ping", fix);
-      const body = await res.json().catch(() => ({}));
-      // A refusal is authoritative: stop sampling until the next /me poll says
-      // otherwise, rather than retrying into a closed door.
-      if (body?.stored === false && body?.reason && body.reason !== "insignificant") {
-        if (["policy-off", "not-clocked-in", "revoked", "paused", "not-disclosed"].includes(body.reason)) {
-          setState((s) => ({ ...s, tracking: false, reason: body.reason }));
-        }
-      }
-      if (body?.stored) setLastSentAt(Date.now());
-      return true;
-    } catch {
-      const q = readQueue();
-      q.push(fix);
-      writeQueue(q);
-      setQueuedCount(q.length);
-      return false;
-    }
-  }, []);
-
-  /** Drain whatever the network took from us. Ordered oldest-first so the
-   *  server's out-of-order guard never has to reject a queued fix. */
   const flush = useCallback(async () => {
-    let q = readQueue();
-    if (q.length === 0) return;
-    q = [...q].sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
-    writeQueue([]);
-    setQueuedCount(0);
-    for (const fix of q) {
-      const ok = await send(fix);
-      if (!ok) break;   // still offline; send() has re-queued it
+    if (!live() || !allowed.current || !lease) return;
+    const result = await flushFieldFixes(lease, async ({ id: _id, ...fix }) => {
+      if (!live() || !allowed.current) throw new Error("Location delivery suspended");
+      const body = await workJson(lease, "POST", "/api/live-ops/ping", fix);
+      if (!live()) throw new Error("Location delivery suspended");
+      if (body?.stored === false && body.reason === "rate-limited") return { retryAfterMs: MIN_INGEST_GAP_MS };
+      const stop = body?.stored === false && ["policy-off", "not-clocked-in", "revoked", "paused", "not-disclosed", "disclosure-outdated", "no-tenant"].includes(body.reason);
+      if (stop) { allowed.current = false; refreshVersion.current++; setState(s => ({ ...s, tracking: false, reason: body.reason })); }
+      if (body?.stored) setLastSentAt(Date.now());
+      return { stop: !!stop };
+    });
+    if (live()) {
+      setQueuedCount(queuedFieldFixes(lease));
+      if (result.retryAfterMs && allowed.current) {
+        if (retryTimer.current) clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => { retryTimer.current = null; void flush(); }, result.retryAfterMs);
+      }
     }
-  }, [send]);
+  }, [lease, live]);
+
+  const send = useCallback((fix: QueuedFix) => {
+    if (!live() || !allowed.current || !lease) return;
+    appendFieldFix(lease, fix); setQueuedCount(queuedFieldFixes(lease)); void flush();
+  }, [lease, live, flush]);
 
   useEffect(() => {
-    if (!enabled) return;
-    const onOnline = () => { flush(); };
+    if (!enabled || !state.tracking) return;
+    void flush();
+    const onOnline = () => { refresh(); };
     window.addEventListener("online", onOnline);
     return () => window.removeEventListener("online", onOnline);
-  }, [enabled, flush]);
+  }, [enabled, state, flush, refresh]);
 
-  // ── The sampling loop ──────────────────────────────────────────────────────
   useEffect(() => {
-    stopped.current = false;
-    if (!enabled || !state.tracking || typeof navigator === "undefined" || !navigator.geolocation) {
-      if (timer.current) clearTimeout(timer.current);
-      return;
-    }
-
+    if (!live() || !state.tracking || !navigator.geolocation) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const current = () => !stopped && live() && allowed.current;
+    const schedule = (speed: number | null) => {
+      if (!current()) return;
+      const delay = document.visibilityState === "hidden" ? PING_INTERVAL_HIDDEN_MS
+        : (speed ?? 0) >= TRAVELING_SPEED_MPS ? PING_INTERVAL_MOVING_MS : PING_INTERVAL_STATIONARY_MS;
+      timer = setTimeout(step, delay);
+    };
     const step = () => {
-      if (stopped.current) return;
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setDenied(false);
-          const next: FixCandidate = {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            accuracyM: pos.coords.accuracy ?? null,
-            capturedAtMs: pos.timestamp || Date.now(),
-          };
-          // The same rule the server applies. Deciding here is what keeps a
-          // parked car from generating a request every minute.
-          const decision = shouldAcceptFix(lastFix.current, next, {
-            lastGoodAccuracyAtMs: lastFix.current?.capturedAtMs ?? null,
-          });
-          if (decision.accept) {
-            lastFix.current = next;
-            void send({
-              lat: next.lat, lng: next.lng, accuracyM: next.accuracyM,
-              capturedAt: new Date(next.capturedAtMs).toISOString(),
-            });
-          }
-          schedule(pos.coords.speed ?? null);
-        },
-        () => {
-          // Denied or timed out. Report it as a STATUS rather than letting the
-          // last known position quietly stand in for the current one.
-          setDenied(true);
-          apiRequest("POST", "/api/live-ops/ping", { locationDenied: true }).catch(() => {});
-          schedule(null);
-        },
-        { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 },
-      );
+      if (!current()) return;
+      navigator.geolocation.getCurrentPosition(pos => {
+        if (!current()) return;
+        setDenied(false);
+        const next: FixCandidate = { lat: pos.coords.latitude, lng: pos.coords.longitude,
+          accuracyM: pos.coords.accuracy ?? null, capturedAtMs: pos.timestamp || Date.now() };
+        if (shouldAcceptFix(lastFix.current, next, { lastGoodAccuracyAtMs: lastFix.current?.capturedAtMs ?? null }).accept) {
+          lastFix.current = next;
+          send({ lat: next.lat, lng: next.lng, accuracyM: next.accuracyM, capturedAt: new Date(next.capturedAtMs).toISOString() });
+        }
+        schedule(pos.coords.speed ?? null);
+      }, () => {
+        if (!current()) return;
+        setDenied(true);
+        void workJson(lease, "POST", "/api/live-ops/ping", { locationDenied: true }).catch(() => {});
+        schedule(null);
+      }, { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 });
     };
-
-    const schedule = (speedMps: number | null) => {
-      if (stopped.current) return;
-      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
-      const moving = (speedMps ?? 0) >= TRAVELING_SPEED_MPS;
-      const delay = hidden
-        ? PING_INTERVAL_HIDDEN_MS
-        : moving ? PING_INTERVAL_MOVING_MS : PING_INTERVAL_STATIONARY_MS;
-      timer.current = setTimeout(step, delay);
-    };
-
+    const stop = () => { stopped = true; if (timer) clearTimeout(timer); };
+    lease?.signal.addEventListener("abort", stop, { once: true });
     step();
-    return () => {
-      stopped.current = true;
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, [enabled, state.tracking, send]);
-
-  useEffect(() => { setQueuedCount(readQueue().length); }, []);
+    return () => { stop(); lease?.signal.removeEventListener("abort", stop); };
+  }, [state.tracking, lease, live, send]);
 
   const acknowledge = useCallback(async () => {
-    await apiRequest("POST", "/api/live-ops/consent/acknowledge", {});
-    refresh();
-  }, [refresh]);
-
+    if (!live()) return;
+    await workJson(lease, "POST", "/api/live-ops/consent/acknowledge", {});
+    if (live()) refresh();
+  }, [lease, live, refresh]);
   const setPaused = useCallback(async (paused: boolean) => {
-    await apiRequest("POST", "/api/live-ops/consent/pause", { paused });
-    refresh();
-  }, [refresh]);
-
-  return {
-    ...state,
-    active: enabled && state.tracking,
-    denied,
-    lastSentAt,
-    queuedCount,
-    refresh,
-    acknowledge,
-    setPaused,
-  };
+    if (!live()) return;
+    await workJson(lease, "POST", "/api/live-ops/consent/pause", { paused });
+    if (live()) refresh();
+  }, [lease, live, refresh]);
+  return { ...state, active: live() && state.tracking, denied, lastSentAt, queuedCount, refresh, acknowledge, setPaused };
 }
 
 /** Human-readable reason, for the indicator. */

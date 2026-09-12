@@ -429,6 +429,39 @@ export function claimRunTargets(runId: string, limit: number, skipRecentlyScanne
   return (_claimTx as any).immediate(runId, limit, skipRecentlyScannedSec, kind) as any;
 }
 
+// Bounded production claim cycle. Inspect at most500 candidates and never
+// hold the writer for a whole-run prune. Shared policy predicates are evaluated
+// on the same snapshot as each guarded queued transition.
+const _boundedClaimSelect = rawDb.prepare(`SELECT t.target_id AS targetId,t.seq,st.address,st.city,st.state,st.zip,st.lat,st.lng,st.carrier,
+  (${answeredSql("st")}) AS answered, (${anfParkedSql("st", ANF_QUIET_DAYS)}) AS parked,
+  (julianday(st.last_scanned_at)>julianday('now',?)) AS recent
+  FROM scan_run_targets t INDEXED BY idx_srt_run_state JOIN scan_targets st ON st.id=t.target_id
+  WHERE t.run_id=? AND t.state='queued' AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))
+  ORDER BY ${_yieldOrder} LIMIT 500`);
+const _boundedSkip = rawDb.prepare(`UPDATE scan_run_targets SET state='skipped',result=?,next_attempt_at=NULL
+  WHERE run_id=? AND target_id=? AND state='queued'`);
+const _boundedClaimTx = rawDb.transaction((runId: string, tenantId: number, limit: number, skipSeconds: number, kind: string) => {
+  const targets: ReturnType<typeof claimRunTargets> = [];
+  if (!rawDb.prepare(`SELECT 1 FROM scan_runs WHERE id=? AND tenant_id=? AND status='running'`).get(runId, tenantId)) return { targets, inspected: 0, skipped: 0 };
+  const rows = _boundedClaimSelect.all(`-${Math.max(0, Math.floor(skipSeconds))} seconds`, runId) as Array<ReturnType<typeof claimRunTargets>[number] & { answered: number; parked: number; recent: number }>;
+  const exempt = isRecheckExemptKind(kind), onceOnly = onceOnlyEnabled();
+  let inspected = 0, skipped = 0;
+  for (const row of rows) {
+    if (targets.length >= limit) break;
+    inspected++;
+    const reason = exempt ? null : onceOnly && row.answered ? "superseded: address already answered (once-only)"
+      : !onceOnly && skipSeconds > 0 && row.recent ? "superseded: address conclusively checked within dedup window"
+        : row.parked ? "parked: address_not_found quiet window (needs-fix non-answers exhausted)" : null;
+    if (reason) { skipped += _boundedSkip.run(reason, runId, row.targetId).changes; continue; }
+    if (_claimMark.run(runId, row.targetId).changes === 1) targets.push(row);
+  }
+  return { targets, inspected, skipped };
+});
+export function claimRunTargetCycle(runId: string, tenantId: number, limit: number, skipSeconds: number, kind: string) {
+  if (!Number.isSafeInteger(tenantId) || tenantId <= 0) throw new Error("Tenant required for scan claim");
+  return _boundedClaimTx.immediate(runId, tenantId, Math.min(500, Math.max(1, Math.floor(limit))), skipSeconds, kind);
+}
+
 // Finalize one checked target: set its terminal state AND bump the run counters
 // in a SINGLE transaction, so a crash between the two can never leave the run's
 // verified/cost totals disagreeing with the per-target ledger.
@@ -680,7 +713,9 @@ export function countQueued(runId: string): number {
 // Repeat the partial-index predicate explicitly; see getStrandedDoneRuns below.
 export function countClaimableQueued(): number {
   try {
-    return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`).c;
+    return g<{ c: number }>(`SELECT
+      (SELECT COUNT(*) FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND next_attempt_at IS NULL)
+      + (SELECT COUNT(*) FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND next_attempt_at<=datetime('now')) c`).c;
   } catch { return 0; }
 }
 
@@ -713,8 +748,8 @@ export function countOpenDeadLetters(): number | null {
 // partial-index predicate: SQLite does not infer that state='queued' implies
 // it. Without that conjunction the subquery scans the complete target ledger
 // (~0.5s per production tick). The same fix is used by countClaimableQueued.
-// Actual-query regression coverage verifies the existing small index is used;
-// no history pruning, additional index or provider eligibility change is needed.
+// The covering due-time index avoids reading payload rows or walking future
+// retries. NULL and dated ranges are disjoint and preserve the due-time rule.
 export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
   return all<ScanRunRow>(
     `SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,
@@ -725,7 +760,10 @@ export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
        FROM scan_runs r
       WHERE r.status IN ('done','error') AND r.id IN (
         SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight')
-          AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))
+          AND t.next_attempt_at IS NULL
+        UNION ALL
+        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight')
+          AND t.next_attempt_at <= datetime('now'))
       ORDER BY r.completed_at ASC LIMIT ?`,
     limit,
   );

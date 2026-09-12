@@ -526,7 +526,7 @@ export function runDbPrune(): void {
   try {
     out.notification_outbox = pruneBatched(
       "notification_outbox",
-      "CASE WHEN status IN ('sent','failed') THEN CAST(strftime('%s', COALESCE(sent_at, created_at)) AS INTEGER) * 1000 ELSE 9e18 END",
+      "CASE WHEN status IN ('sent','failed','discarded') THEN CAST(strftime('%s', COALESCE(sent_at, created_at)) AS INTEGER) * 1000 ELSE 9e18 END",
       now - OUTBOX_KEEP_DAYS * 86_400_000);
   } catch { /* */ }
   try { out.location_pings = pruneLocationPings(now); } catch { /* */ }

@@ -353,18 +353,20 @@ export function registerLiveOpsRoutes(app: Express, deps: Deps) {
       res.flushHeaders();
       clients.add(res);
       liveOpsStreams.set(t, clients);
-      res.write(`event: ready\ndata: {}\n\n`);
 
       const heartbeat = setInterval(() => {
         if (!res.writableEnded) { try { res.write(": keepalive\n\n"); } catch { res.end(); } }
       }, 25_000);
       heartbeat.unref();
 
-      req.on("close", () => {
+      const cleanup = () => {
         clearInterval(heartbeat);
         clients.delete(res);
         if (!clients.size) liveOpsStreams.delete(t);
-      });
+      };
+      req.on("close", cleanup);
+      res.on("close", cleanup);
+      res.write(`event: ready\ndata: {}\n\n`);
     });
 
   // ── Policy administration ──────────────────────────────────────────────────

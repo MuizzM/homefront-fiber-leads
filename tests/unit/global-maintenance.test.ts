@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ audit: vi.fn(), drain: vi.fn(), next: vi.fn(), stop: vi.fn(), calling: vi.fn(), tx: vi.fn(), read: vi.fn() }));
-vi.mock("../../server/db", () => ({ rawDb: { prepare: () => ({ get: mocks.read }) } }));
+const mocks = vi.hoisted(() => ({ audit: vi.fn(), drain: vi.fn(), next: vi.fn(), stop: vi.fn(), calling: vi.fn(), tx: vi.fn(), read: vi.fn(), email: vi.fn(), scanner: vi.fn() }));
+vi.mock("../../server/db", () => ({ rawDb: { prepare: (sql: string) => ({ get: sql.includes("scanner_count_checks") ? () => undefined : mocks.read }) } }));
 vi.mock("../../server/interactiveDb", () => ({
   interactiveTransaction: (_db: unknown, work: () => unknown) => { mocks.tx(); return Promise.resolve(work()); },
   retrySqliteOperation: (_db: unknown, work: () => unknown) => Promise.resolve(work()),
@@ -11,11 +11,16 @@ vi.mock("../../server/calling/store", () => ({ verifyCallingAuditIntegrity: mock
 vi.mock("../../server/incentiveSubscriber", () => ({ drainOnce: mocks.drain, SUBSCRIBER_NAME: "incentives" }));
 vi.mock("../../server/domainEventStore", () => ({ nextBatch: mocks.next }));
 vi.mock("../../server/structuredLog", () => ({ structuredLog: vi.fn() }));
+vi.mock("../../server/otpDeliveryWorker", () => ({ drainOtpDeliveries: mocks.email }));
+vi.mock("../../server/otpDeliveryStore", () => ({ purgeOtpDeliveryReceipts: () => 0 }));
+vi.mock("../../server/assignmentOperationStore", () => ({ purgeAssignmentReceipts: () => 0, assignmentReceiptCleanupDue: () => false }));
+vi.mock("../../server/scannerReliability", () => ({ purgeTerminalScannerProgress: mocks.scanner }));
 import { startGlobalMaintenance } from "../../server/globalMaintenance";
 const result = { processed: 1, awarded: 1, reversed: 0, failed: [], deferred: [], skipped: [] };
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   mocks.calling.mockResolvedValue(mocks.stop);
+  mocks.email.mockResolvedValue(undefined); mocks.scanner.mockResolvedValue(0);
   mocks.audit.mockReturnValue({ invalidTenants: [], tenantsChecked: 1, eventsChecked: 2 });
   mocks.next.mockReturnValue([]); mocks.read.mockReturnValue(undefined);
   mocks.drain.mockReturnValue(result);
@@ -23,6 +28,16 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 const yieldReal = () => new Promise(resolve => setImmediate(resolve));
 describe("global maintenance ownership and progress", () => {
+  it("does not overlap delivery drains and aborts the active transport on stop", async () => {
+    let release!: () => void;
+    mocks.email.mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+    const stop = await startGlobalMaintenance(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.email).toHaveBeenCalledTimes(1);
+    const signal = mocks.email.mock.calls[0][1].signal as AbortSignal;
+    stop(); expect(signal.aborted).toBe(true); release();
+    await vi.advanceTimersByTimeAsync(10_000); expect(mocks.email).toHaveBeenCalledTimes(1);
+  });
   it("installs no work in any cluster worker, even over six-hour timer cycles", async () => {
     const stop = await startGlobalMaintenance(true);
     await vi.advanceTimersByTimeAsync(12 * 60 * 60_000);

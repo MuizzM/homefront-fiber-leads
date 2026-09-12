@@ -1,3 +1,5 @@
+import { checkScanRunCounts } from "./scanCountIntegrity";
+import { startScannerProgress, scannerPhase } from "./scannerReliability";
 // ── Budgeted, resumable scan engine ───────────────────────────────────────────
 // A scan is a durable, budgeted spend of proxy money against the address pool.
 // This engine dispatches the highest-EV queued targets for a run, verifies each
@@ -37,7 +39,7 @@ import {
 import {
   getRun,
   setRunStatus,
-  claimRunTargets,
+  claimRunTargetCycle,
   finalizeRunTarget,
   requeueRunTarget,
   addRunBytes,
@@ -287,6 +289,8 @@ export async function runScanWorker(
   // answers correctly — it just stops costing a row to ask.
   const workerId = stableWorkerId();
   let terminalError: string | null = null;
+  const runAborted = () => { const r = getRun(runId, tenantId); return !r || r.status !== "running"; };
+  const progress = startScannerProgress(rawDb, tenantId, runId);
   // DECOUPLED RUN HEARTBEAT — the reaper's only cross-process ownership signal.
   // touchRun() is also called per-batch (below), but a batch can stall far past the
   // reaper's staleness window during a long admission wait (coordinator can block a
@@ -303,6 +307,7 @@ export async function runScanWorker(
     try { touchRun(runId); } catch { /* transient DB busy — next tick covers it */ }
   }, 10_000);
   if (typeof (hbTimer as any).unref === "function") (hbTimer as any).unref();
+  try {
   beginFiberWorker(tenantId, runId);
   // Mint a fresh token before this run starts — Scan Map, city, and nightly scans
   // all pass through here. Best-effort: a mint hiccup is non-fatal (the pool and
@@ -323,7 +328,6 @@ export async function runScanWorker(
   // Fixed batch size. There is NO AIMD/backoff/cooldown: the shared distributed
   // coordinator's steady concurrency + requests-per-minute cap is the only pacing.
   const BATCH = Math.max(1, Number(process.env.SCAN_BATCH_CONCURRENCY) || 100);
-  try {
     for (;;) {
       const run = getRun(runId, tenantId);
       if (!run) return;
@@ -348,6 +352,7 @@ export async function runScanWorker(
       // heartbeat fresh so no sibling reaper reclaims the run mid-cooldown.
       // Unlimited mode: isProxyCircuitOpen() is always false → zero change.
       if (isProxyCircuitOpen()) {
+        scannerPhase(progress.state, "cooldown");
         touchRun(runId);
         logBreakerWait(runId, tenantId);
         await new Promise((r) => setTimeout(r, BREAKER_WAIT_MS));
@@ -357,7 +362,9 @@ export async function runScanWorker(
       // grab the same targets and double-spend the proxy. Requeued (transient-error)
       // targets are 'queued' again, so the queue only drains once every address has
       // a conclusive or unresolved answer.
-      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind), run.kind);
+      scannerPhase(progress.state, "claiming");
+      const cycle = claimRunTargetCycle(runId, tenantId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind), run.kind);
+      const batch = cycle.targets;
       // Yield a full event-loop turn every claim cycle: a batch of instantly-failing
       // addresses (fail-closed transport) would otherwise chain microtasks forever
       // and starve timers/cancels. One setImmediate per batch costs ~nothing.
@@ -368,6 +375,7 @@ export async function runScanWorker(
       // it contracts before users feel it and re-expands when the site is idle.
       await adaptivePace();
       if (batch.length === 0) {
+        if (cycle.inspected > 0) continue; // a prune-only page is not a drained queue
         finish(run, "done");
         return;
       } // queue drained — every address conclusively resolved (or deduped-skip)
@@ -381,6 +389,7 @@ export async function runScanWorker(
         metadata: { completed: run.verified + run.failed, budget: run.budget },
       });
 
+      scannerPhase(progress.state, "checking", batch.length);
       let blockedInBatch = 0; // 403/throttle count — drives the storm back-off below
       await Promise.all(
         batch.map(async (t) => {
@@ -399,7 +408,7 @@ export async function runScanWorker(
               source: providerPriorityForRun(run.kind),
               // Abandon the admission wait immediately if the run is cancelled/paused,
               // rather than blocking up to admissionMaxWaitMs.
-              abort: () => { const r = getRun(runId, tenantId); return !r || r.status !== "running"; },
+              abort: runAborted,
             });
             // The check may have taken seconds of network time — a cancel/pause
             // that landed MID-FLIGHT must win. Record NOTHING on a non-running
@@ -539,6 +548,8 @@ export async function runScanWorker(
               detail: message.slice(0, 160),
               tsEpoch: Date.now(),
             });
+          } finally {
+            scannerPhase(progress.state, "checking", Math.max(0, progress.state.inflight - 1));
           }
         }),
       );
@@ -553,12 +564,14 @@ export async function runScanWorker(
       // persisted halt (a DB-persisted 403 halt once survived restarts and stranded
       // scanning at "0 checked"). PROVIDER_BLOCK_* tune it.
       if (batch.length > 0 && blockedInBatch / batch.length >= PROVIDER_BLOCK_BACKOFF_FRACTION) {
+        scannerPhase(progress.state, "cooldown");
         const severity = blockedInBatch / batch.length; // 0..1
         const backoffMs = Math.round(PROVIDER_BLOCK_BACKOFF_MS * severity);
         structuredLog("scan.provider.storm_backoff", { runId, blocked: blockedInBatch, batch: batch.length, backoffMs }, "warn");
         await new Promise((r) => setTimeout(r, backoffMs));
       }
 
+      scannerPhase(progress.state, "saving");
       const current = getRun(runId, tenantId);
       if (current)
         appendFiberEvent({
@@ -644,6 +657,13 @@ export async function runScanWorker(
       lastError: message,
     });
   } finally {
+    // Cleanup cannot depend on diagnostic persistence succeeding. Otherwise a
+    // dead worker keeps heartbeating and prevents the durable reaper recovering it.
+    clearInterval(hbTimer);
+    progress.stop();
+    activeRuns.delete(runId);
+    try { checkScanRunCounts(rawDb, tenantId, runId); } catch { /* diagnostic failure cannot hold the worker */ }
+    try {
     heartbeatWorker({
       workerId,
       tenantId,
@@ -652,9 +672,9 @@ export async function runScanWorker(
       concurrency: 0,
       lastError: terminalError,
     });
-    clearInterval(hbTimer); // stop the decoupled heartbeat so a finished/dead run goes stale and is reclaimable
-    activeRuns.delete(runId);
-    pumpRunQueue(); // a slot freed — start the next queued run, if any
+    } catch {
+      structuredLog("scanner.terminal_heartbeat_failed", { tenantId, runId }, "warn");
+    } finally { pumpRunQueue(); }
   }
 }
 

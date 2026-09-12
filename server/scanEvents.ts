@@ -229,20 +229,24 @@ function bucketOf(stage: ScanStage): keyof Omit<InspectorCounters, "found" | "ne
 }
 
 export interface InspectorScope {
+  /** Set by authenticated callers; absence is reserved for platform operations. */
+  tenantId?: number;
   runId?: string | null;
   city?: string | null;
   state?: string | null;
 }
 
-function inspectorWhere(scope: InspectorScope, alias = ""): { sql: string; params: Record<string, string | null> } {
+function inspectorWhere(scope: InspectorScope, alias = ""): { sql: string; params: Record<string, string | number | null> } {
   const prefix = alias ? `${alias}.` : "";
   const clauses: string[] = [];
+  if (scope.tenantId !== undefined) clauses.push(`EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id = ${prefix || "scan_events."}run_id AND sr.tenant_id = @tenantId)`);
   if (scope.runId) clauses.push(`${prefix}run_id = @runId`);
   if (scope.city) clauses.push(`lower(trim(${prefix}city)) = lower(trim(@city))`);
   if (scope.state) clauses.push(`upper(trim(${prefix}state)) = upper(trim(@state))`);
   return {
     sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
     params: {
+      tenantId: scope.tenantId ?? null,
       runId: scope.runId ?? null,
       city: scope.city ?? null,
       state: scope.state ?? null,
@@ -263,20 +267,17 @@ export function getInspectorSnapshot(opts: { limit?: number } & InspectorScope =
   // looking at Concord never receives or counts rows from another city.
   const where = inspectorWhere(opts);
   const latest = rawDb.prepare(`
-    SELECT e.* FROM scan_events e
+    SELECT e.*, m.first_seen FROM scan_events e
     JOIN (
-      SELECT address_key, MAX(id) AS mid FROM scan_events ${where.sql} GROUP BY address_key
+      SELECT address_key, MAX(id) AS mid, MIN(ts_epoch) AS first_seen FROM scan_events ${where.sql} GROUP BY address_key
     ) m ON m.mid = e.id
     ORDER BY e.id DESC
     LIMIT @limit
   `).all({ limit, ...where.params }) as any[];
 
-  // First-seen ts per address (for "started at" + duration).
-  const firstWhere = inspectorWhere(opts, "scan_events");
+  // The same scoped aggregate supplies first-seen time. This removes one query
+  // per returned address and prevents another tenant's matching key leaking time.
   const rows: InspectorRow[] = latest.map((e) => {
-    const first = rawDb.prepare(
-      `SELECT MIN(ts_epoch) f FROM scan_events ${firstWhere.sql}${firstWhere.sql ? " AND" : " WHERE"} address_key = @addressKey`,
-    ).get({ addressKey: e.address_key, ...firstWhere.params }) as { f: number };
     return {
       addressKey: e.address_key,
       address: e.address, city: e.city, state: e.state, zip: e.zip,
@@ -285,7 +286,7 @@ export function getInspectorSnapshot(opts: { limit?: number } & InspectorScope =
       attempt: e.attempt, httpStatus: e.http_status, latencyMs: e.latency_ms,
       sessionId: e.session_id, tokenSuffix: e.token_suffix,
       retryReason: e.retry_reason, classification: e.classification, detail: e.detail,
-      startedAt: first?.f ?? e.ts_epoch, updatedAt: e.ts_epoch,
+      startedAt: e.first_seen ?? e.ts_epoch, updatedAt: e.ts_epoch,
     };
   });
 
@@ -304,16 +305,17 @@ export function getInspectorSnapshot(opts: { limit?: number } & InspectorScope =
   return { rows, counters, sessionRotations: null };
 }
 
-export function getAddressTimeline(addressKey: string, limit = 60): Array<ScanStageEvent & { id: number }> {
+export function getAddressTimeline(addressKey: string, limit = 60, scope: InspectorScope = {}): Array<ScanStageEvent & { id: number }> {
   ensureSchema();
   // Match getInspectorSnapshot's freshness guarantee. An operator commonly
   // expands a row immediately after its terminal SSE event; without this flush,
   // the timeline endpoint can omit the last buffered Saving/Classified stages
   // for up to FLUSH_MS and appear to contradict the live row.
   if (BATCH_ENABLED && _buf.length) { try { flushScanEvents(); } catch { /* best-effort */ } }
+  const where = inspectorWhere(scope);
   const rows = rawDb.prepare(
-    `SELECT * FROM scan_events WHERE address_key = ? ORDER BY id ASC LIMIT ?`,
-  ).all(addressKey, Math.min(200, limit)) as any[];
+    `SELECT * FROM scan_events ${where.sql}${where.sql ? " AND" : " WHERE"} address_key = @addressKey ORDER BY id ASC LIMIT @limit`,
+  ).all({ ...where.params, addressKey, limit: Math.max(1, Math.min(200, limit)) }) as any[];
   return rows.map((e) => ({
     id: e.id, addressKey: e.address_key, address: e.address, city: e.city, state: e.state, zip: e.zip,
     runId: e.run_id, source: e.source, stage: e.stage, status: e.status, attempt: e.attempt,

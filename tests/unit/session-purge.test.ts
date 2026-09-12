@@ -127,7 +127,8 @@ describe("session token storage (SEC-B)", () => {
   it("logout and 401 purge paths call the session-scoped sweep", () => {
     const auth = fs.readFileSync(path.join(clientSrc, "lib/auth.tsx"), "utf8");
     // login (identity switch), logout, and the confirmed-401 handler all purge.
-    expect(auth).toMatch(/function clearIdentity\(\)[\s\S]*?purgeSessionScopedKeys\(\)/);
-    expect(auth.match(/clearIdentity\(\);/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(auth).toMatch(/function clearIdentity\([^)]*\)[\s\S]*?purgeSessionScopedKeys\(/);
+    expect(auth).toMatch(/else purgeWork\(\);/);
+    expect(auth).toMatch(/function logout[\s\S]*?clearIdentity\(\);/);
   });
 });

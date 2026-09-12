@@ -4,7 +4,7 @@
 // reconciliation) cannot drift between screens.
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { currentWorkLease, isCurrentWorkLease, workJson, workOwner } from "./workAuthority";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { getKnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
@@ -68,17 +68,18 @@ export function useKnockLogger() {
   );
 
   const queue = useMemo(() => {
-    if (queueOwnerKey == null) return null;
+    if (queueOwnerKey == null || !user) return null;
     return getKnockQueue({
       // Registry/storage ownership is deliberately separate from the credited
       // real repId supplied on each enqueue.
       repId: queueOwnerKey,
-      post: (url, body) => apiRequest("POST", url, body).then(r => r.json()),
-      patch: (url, body) => apiRequest("PATCH", url, body).then(r => r.json()),
+      owner: workOwner(user),
+      post: (url, body, lease) => workJson(lease ?? null, "POST", url, body),
+      patch: (url, body, lease) => workJson(lease ?? null, "PATCH", url, body),
       onSaved: reconcileSavedKnock,
       onResolved: resolveDroppedKnock,
     });
-  }, [queueOwnerKey, reconcileSavedKnock, resolveDroppedKnock]);
+  }, [queueOwnerKey, user?.id, user?.tenantId, user?.teamMemberId, reconcileSavedKnock, resolveDroppedKnock]);
 
   // Re-apply unsent knocks after every server read of the map, so a poll, the
   // map-changed stream, or a tab refocus can no longer revert a pin the rep has
@@ -121,11 +122,25 @@ export function useKnockLogger() {
       });
       return false;
     }
-    if (!queue) {
+    const lease = user ? currentWorkLease(workOwner(user)) : null;
+    if (!queue || !queue.canCapture() || !lease) {
       toast({ title: "Unable to save this outcome", variant: "destructive" });
       return false;
     }
     const at = new Date().toISOString();
+    const staged = queue.stage({
+      leadId: lead.id,
+      repId: credit,
+      outcome,
+      notes: opts.notes ?? null,
+      callbackDate: opts.callbackDate ?? null,
+      callbackTime: opts.callbackTime ?? null,
+      deviceTs: at,
+      netState:
+        typeof navigator === "undefined" || navigator.onLine !== false
+          ? "online"
+          : "offline",
+    });
     // Optimistic recolor on the SHARED map cache — the pin updates everywhere at once.
     // lastOutcomeAt mirrors the server's CAS clock (the knock's knockedAt IS
     // what applyKnockOutcomeCas writes to last_outcome_at), so a teammate's
@@ -144,20 +159,8 @@ export function useKnockLogger() {
       // re-application can never disagree about what the pin should look like.
       return mergePendingOutcomes(bumped, { [lead.id]: { outcome, at } });
     });
-    const staged = queue.stage({
-      leadId: lead.id,
-      repId: credit,
-      outcome,
-      notes: opts.notes ?? null,
-      callbackDate: opts.callbackDate ?? null,
-      callbackTime: opts.callbackTime ?? null,
-      deviceTs: at,
-      netState:
-        typeof navigator === "undefined" || navigator.onLine !== false
-          ? "online"
-          : "offline",
-    });
     void captureFieldFix().then((fix) => {
+      if (!isCurrentWorkLease(lease) || !queue.canCapture()) return;
       queue.enrich(staged.clientId, fix);
       return queue.flush();
     });

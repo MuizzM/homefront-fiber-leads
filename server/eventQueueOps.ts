@@ -198,7 +198,7 @@ export function isOperatorCleared(state: any): boolean {
 export type OperatorAction = "RETRY" | "DEAD_LETTER" | "RESOLVE";
 
 export class QueueAccessError extends Error {
-  constructor(public readonly code: "ORG_REQUIRED" | "QUEUE_EVENT_NOT_FOUND", public readonly httpStatus: number, message: string) {
+  constructor(public readonly code: "ORG_REQUIRED" | "QUEUE_EVENT_NOT_FOUND" | "QUEUE_STATE_CHANGED" | "QUEUE_CURSOR_PASSED" | "FORBIDDEN", public readonly httpStatus: number, message: string) {
     super(message);
   }
 }
@@ -213,10 +213,12 @@ export function requireQueueTenant(tenantId: number): number {
 export async function operatorAction(input: {
   subscriber: string; eventId: number; action: OperatorAction;
   actorUserId: number | null; reason: string; tenantId: number;
+  /** HTTP callers must revalidate current authority inside the writer lease. */
+  authorize?: () => void;
 }): Promise<any> {
   const tenantId = requireQueueTenant(input.tenantId);
   const reason = String(input.reason ?? "").trim();
-  if (reason.length < 3) throw new Error("A reason is required for queue operator actions.");
+  if (reason.length < 3 || reason.length > 500) throw new Error("A reason is required for queue operator actions (3–500 characters).");
   if (!["RETRY", "DEAD_LETTER", "RESOLVE"].includes(input.action)) throw new Error("Invalid queue operator action.");
 
   const ownedState = rawDb.prepare(`SELECT s.* FROM event_processing_state s
@@ -230,9 +232,14 @@ export async function operatorAction(input: {
 
   const ts = now();
   const state = await interactiveTransaction(rawDb, () => {
+    input.authorize?.();
     // Queue metadata is mutable and historically nullable. Only the immutable
     // event establishes ownership; a cached tenant must never grant access.
     const prior = getOwnedState();
+    if (!["failed", "blocked", "dead_lettered"].includes(prior.status))
+      throw new QueueAccessError("QUEUE_STATE_CHANGED", 409, "This event has changed. Refresh the queue before acting.");
+    if (input.action === "RETRY" && input.eventId <= cursorFor(input.subscriber))
+      throw new QueueAccessError("QUEUE_CURSOR_PASSED", 409, "The queue has advanced past this event. Review its financial effects; replay is unavailable.");
     const status = input.action === "RETRY" ? "pending" : input.action === "DEAD_LETTER" ? "dead_lettered" : "resolved";
     rawDb.prepare(`UPDATE event_processing_state SET status=?,retryable=?,next_attempt_at=NULL,
       lease_owner=NULL,lease_expires_at=NULL,resolved_by=?,resolved_reason=?,resolved_at=?,updated_at=?

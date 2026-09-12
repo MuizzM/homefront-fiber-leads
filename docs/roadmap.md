@@ -20,6 +20,10 @@ email delivery and do not establish capacity for millions of users. Capacity
 work must name concurrent active users, tenant sizes, stored rows, peak requests,
 job throughput, device/network conditions and an affordable operating envelope.
 
+## Current increment
+
+Foundation PR #231 is deployed at `02874d194773c2c0f127e9411b1edd7890d83326`. The reliability branch now implements the assignment and sign-in recovery slice, scanner/count fixes, and recovery diagnostics. These changes are under verification, with the actual seven-day staging soak and 48-hour canary still pending. See the [current board](upgrade-board.md) and [release gates](runbooks/reliability-hardening.md). Other phase milestones remain open.
+
 ## Phases and exit criteria
 
 | Phase | Owners | Concrete milestone and exit criteria |

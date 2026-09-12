@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The lead push channel must not leak past the boundary REST already defends.
 //
 // A stream is the easy place to get this wrong: the connection is authorized

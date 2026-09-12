@@ -1,3 +1,4 @@
+import { canAdoptLegacyWork, currentWorkLease, isCurrentWorkLease, sameWorkOwner, subscribeWorkAuthority, workOwnerKey, type WorkOwner, type WorkLease } from "./workAuthority";
 // Offline-first knock save queue — framework-free (no React, no react-query).
 // Every tap enqueues a QueuedKnock keyed by a clientId the server dedupes on,
 // so retries after flaky saves can never double-log a knock. Persistence is
@@ -54,9 +55,10 @@ export interface StorageLike {
 }
 
 export interface KnockQueueOpts {
+  owner?: WorkOwner;
   repId: number;
-  post: (url: string, body: unknown) => Promise<any>; // parsed JSON; throws Error("<status>: <text>")
-  patch: (url: string, body: unknown) => Promise<any>;
+  post: (url: string, body: unknown, lease?: WorkLease | null) => Promise<any>; // parsed JSON; throws Error("<status>: <text>")
+  patch: (url: string, body: unknown, lease?: WorkLease | null) => Promise<any>;
   storage?: StorageLike;
   now?: () => number;
   isOnline?: () => boolean;
@@ -118,6 +120,9 @@ export interface KnockQueue {
   notifyRecovery(): void;
   subscribe(cb: () => void): () => void;
   getSnapshot(): QueueSnapshot; // referentially stable until state changes
+  canCapture(): boolean;
+  suspend(): void;
+  resume(): void;
   destroy(): void;
 }
 
@@ -164,12 +169,12 @@ function safeStorage(inner?: StorageLike): StorageLike {
   };
 }
 
-function loadItems(storage: StorageLike, key: string): QueuedKnock[] {
+function loadItems(storage: StorageLike, key: string, owner?: WorkOwner): QueuedKnock[] {
   const raw = storage.getItem(key);
   if (!raw) return [];
   try {
     const env = JSON.parse(raw);
-    if (!env || env.v !== 1 || !Array.isArray(env.items)) {
+    if (!env || env.v !== 1 || !Array.isArray(env.items) || (env.owner && owner && !sameWorkOwner(env.owner, owner))) {
       console.warn(`[knockQueue] discarding unrecognized envelope at ${key}`);
       return [];
     }
@@ -185,8 +190,15 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   const isOnline = opts.isOnline ??
     (() => (typeof navigator === "undefined" ? true : navigator.onLine !== false));
   const storage = safeStorage(opts.storage);
-  const pendingKey = `hf.knockQueue.v1.${opts.repId}`;
-  const deadKey = `hf.knockDead.v1.${opts.repId}`;
+  const registryKey = opts.owner ? workOwnerKey(opts.owner) : String(opts.repId);
+  const pendingKey = opts.owner ? `hf.knockQueue.v2.${registryKey}` : `hf.knockQueue.v1.${opts.repId}`;
+  const deadKey = opts.owner ? `hf.knockDead.v2.${registryKey}` : `hf.knockDead.v1.${opts.repId}`;
+  if (opts.owner && canAdoptLegacyWork(opts.owner)) {
+    for (const [legacy, current] of [[`hf.knockQueue.v1.${opts.repId}`, pendingKey], [`hf.knockDead.v1.${opts.repId}`, deadKey]]) {
+      if (!storage.getItem(current) && storage.getItem(legacy)) storage.setItem(current, storage.getItem(legacy)!);
+      storage.removeItem(legacy);
+    }
+  }
 
   // Rehydration triage: persisted items are migrated/repaired, undeliverable
   // ones (temp lead ids, outcomes the server no longer accepts, dead items
@@ -195,13 +207,13 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   const pending: QueuedKnock[] = [];
   const dead: QueuedKnock[] = [];
   const droppedOnLoad: Array<{ item: QueuedKnock; reason: string }> = [];
-  for (const raw of loadItems(storage, pendingKey)) {
+  for (const raw of loadItems(storage, pendingKey, opts.owner)) {
     const t = triageRehydratedKnock(raw, "pending");
     if (!t) continue;
     if (t.action === "drop") droppedOnLoad.push({ item: t.item, reason: t.reason });
     else pending.push(t.item);
   }
-  for (const raw of loadItems(storage, deadKey)) {
+  for (const raw of loadItems(storage, deadKey, opts.owner)) {
     const t = triageRehydratedKnock(raw, "dead");
     if (!t) continue;
     if (t.action === "drop") droppedOnLoad.push({ item: t.item, reason: t.reason });
@@ -226,9 +238,15 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const idleTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let destroyed = false;
+  let suspended = !!opts.owner && !currentWorkLease(opts.owner);
+  let runVersion = 0;
+  let unsubscribeAuthority = () => {};
+  const canCapture = () => !destroyed && !suspended && (!opts.owner || !!currentWorkLease(opts.owner));
+  const currentRun = (version: number, lease: WorkLease | null) => canCapture() && version === runVersion
+    && (!opts.owner || isCurrentWorkLease(lease));
 
   const persist = (key: string, items: QueuedKnock[]): void => {
-    if (items.length) storage.setItem(key, JSON.stringify({ v: 1, items }));
+    if (items.length) storage.setItem(key, JSON.stringify({ v: 1, owner: opts.owner, items }));
     else storage.removeItem(key);
   };
   const persistPending = () => persist(pendingKey, pending);
@@ -266,6 +284,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   // "saved" is a 2s flash, then the entry is dropped (missing = idle).
   const scheduleIdle = (leadId: number): void => {
     idleTimers.set(leadId, setTimeout(() => {
+      if (!canCapture()) return;
       idleTimers.delete(leadId);
       if (byLead[leadId] === "saved") { delete byLead[leadId]; markChanged(); }
     }, SAVED_FLASH_MS));
@@ -283,7 +302,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
 
   // Heartbeat runs ONLY while something is pending — an idle queue costs nothing.
   const syncInterval = (): void => {
-    if (destroyed) return;
+    if (!canCapture()) return;
     if (pending.length > 0 && interval == null) {
       interval = setInterval(() => { void flush(); }, INTERVAL_MS);
     } else if (pending.length === 0 && interval != null) {
@@ -296,7 +315,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   // wait on the head anyway, and the 30s heartbeat backstops everything else.
   const armRetryTimer = (): void => {
     if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
-    if (destroyed) return;
+    if (!canCapture()) return;
     const t = now();
     let earliest = Infinity;
     for (const it of pending) {
@@ -345,7 +364,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   // The cooldown guarantees a genuinely broken server sees at most one sweep
   // per minute — this can never hot-loop.
   const autoSweep = (): void => {
-    if (destroyed || !isOnline()) return;
+    if (!canCapture() || !isOnline()) return;
     const t = now();
     if (t - lastAutoSweepAt < AUTO_RETRY_COOLDOWN_MS) return;
     const targets: QueuedKnock[] = [];
@@ -373,13 +392,16 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   };
 
   async function flush(): Promise<void> {
-    if (inflight || destroyed) return;
+    if (inflight || !canCapture()) return;
     if (!isOnline()) return;
     inflight = true;
+    const version = runVersion;
+    const lease = opts.owner ? currentWorkLease(opts.owner) : null;
     try {
       let idx = 0;
       // pending.length re-checked each pass — items enqueued mid-flush get sent too.
       while (idx < pending.length) {
+        if (!currentRun(version, lease)) return;
         const item = pending[idx];
         if (item.nextAttemptAt > now()) { idx++; continue; } // not due yet
         try {
@@ -401,7 +423,8 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
             netState: item.netState ?? null,
             appVersion: item.appVersion ?? null,
             // no wasHome — the server derives it from outcome
-          });
+          }, lease);
+          if (!currentRun(version, lease)) return;
           // Created and clientId-deduped replays look the same here: done.
           pending.splice(idx, 1);
           persistPending();
@@ -422,6 +445,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           // whenever the dead lane is empty).
           autoSweep();
         } catch (err) {
+          if (!currentRun(version, lease)) return;
           const message = err instanceof Error ? err.message : String(err);
           item.lastError = message; // apiRequest throws Error("<status>: <text>")
           const kind = classifyKnockFailure(message);
@@ -473,6 +497,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
         }
       }
     } finally {
+      if (version !== runVersion) return;
       inflight = false;
       syncInterval();
       armRetryTimer();
@@ -482,8 +507,9 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   // Recovery signals: connectivity returning and the app coming back to the
   // foreground each run one silent dead-lane sweep (cooldown-gated) before the
   // normal flush, so the "needs attention" pill heals itself after an outage.
-  const onOnline = (): void => { markChanged(); autoSweep(); void flush(); };
+  const onOnline = (): void => { if (!canCapture()) return; markChanged(); autoSweep(); void flush(); };
   const onVisible = (): void => {
+    if (!canCapture()) return;
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
     autoSweep();
     void flush();
@@ -492,6 +518,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
 
   const stage = (k: EnqueueInput): { clientId: string } => {
+    if (!canCapture()) throw new Error("Sign in before recording more work");
     // A temp optimistic pin (negative id) or garbage id must NEVER enter the
     // queue — it can only ever 404 and rot. Callers (useKnockLogger) block
     // this with a friendly toast first; throwing here is the last line.
@@ -532,6 +559,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     stage,
 
     enrich(clientId, evidence) {
+      if (!canCapture()) return false;
       const item = pending.find((candidate) => candidate.clientId === clientId);
       if (!item) return false;
       item.repLat = evidence.repLat ?? null;
@@ -557,6 +585,9 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     // Note edits ride along with an unsent knock when possible (one request,
     // works offline); otherwise PATCH the already-created row.
     async updateNote(leadId, notes) {
+      if (!canCapture()) return "not-found";
+      const version = runVersion;
+      const lease = opts.owner ? currentWorkLease(opts.owner) : null;
       for (let i = pending.length - 1; i >= 0; i--) {
         if (pending[i].leadId === leadId) {
           pending[i].notes = notes;
@@ -567,7 +598,8 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
       const saved = recentSaves.get(leadId);
       if (saved && saved.knockId != null) {
         try {
-          await opts.patch(`/api/knocks/${saved.knockId}`, { notes });
+          await opts.patch(`/api/knocks/${saved.knockId}`, { notes }, lease);
+          if (!currentRun(version, lease)) return "not-found";
           return "patched";
         } catch {
           return "not-found";
@@ -577,6 +609,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     },
 
     retryDead(clientId) {
+      if (!canCapture()) return;
       const targets = clientId == null ? dead.splice(0) : (() => {
         const i = dead.findIndex((d) => d.clientId === clientId);
         return i === -1 ? [] : dead.splice(i, 1);
@@ -613,8 +646,26 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
 
     getSnapshot: () => snapshot,
 
+    canCapture,
+    suspend() {
+      suspended = true; runVersion++; inflight = false;
+      if (interval != null) { clearInterval(interval); interval = null; }
+      if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
+      idleTimers.forEach(clearTimeout); idleTimers.clear();
+    },
+    resume() {
+      if (destroyed || (opts.owner && !currentWorkLease(opts.owner))) return;
+      suspended = false; runVersion++; inflight = false;
+      syncInterval(); armRetryTimer();
+      queueMicrotask(() => { void flush(); });
+    },
     destroy() {
+      queue.suspend();
       destroyed = true;
+      unsubscribeAuthority();
+      pending.length = 0;
+      dead.length = 0; recentSaves.clear();
+
       if (interval != null) { clearInterval(interval); interval = null; }
       if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
       idleTimers.forEach((t) => clearTimeout(t));
@@ -622,9 +673,19 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
       listeners.clear();
       if (typeof window !== "undefined") window.removeEventListener("online", onOnline);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
-      if (registry.get(opts.repId) === queue) registry.delete(opts.repId);
+      if (registry.get(registryKey) === queue) registry.delete(registryKey);
     },
   };
+
+  if (opts.owner) unsubscribeAuthority = subscribeWorkAuthority(event => {
+    if (event === "purge") {
+      storage.removeItem(pendingKey);
+      storage.removeItem(deadKey);
+      queue.destroy();
+    } else if (event === "discard") queue.destroy();
+    else if (event === "suspend") queue.suspend();
+    else if (currentWorkLease(opts.owner)) queue.resume();
+  });
 
   // Reload recovery: persisted items resurface as queued/error chips, and the
   // first flush fires as soon as the caller has the queue object in hand.
@@ -641,7 +702,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   // microtask so the caller holds the queue (and its toast plumbing) first.
   if (droppedOnLoad.length) {
     queueMicrotask(() => {
-      if (destroyed) return;
+      if (!canCapture()) return;
       for (const d of droppedOnLoad) {
         console.error(
           `[knockQueue] dropped undeliverable knock ${d.item.clientId} (lead ${d.item.leadId}, ${d.item.outcome}): ${d.reason}`,
@@ -662,13 +723,14 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
 
 // One live queue per rep — MapView and the lead sheet share state and timers.
 // destroy() deregisters, so tests can create fresh instances per case.
-const registry = new Map<number, KnockQueue>();
+const registry = new Map<string, KnockQueue>();
 
 export function getKnockQueue(opts: KnockQueueOpts): KnockQueue {
-  const existing = registry.get(opts.repId);
+  const registryKey = opts.owner ? workOwnerKey(opts.owner) : String(opts.repId);
+  const existing = registry.get(registryKey);
   if (existing) return existing;
   const q = createKnockQueue(opts);
-  registry.set(opts.repId, q);
+  registry.set(registryKey, q);
   return q;
 }
 
