@@ -977,9 +977,6 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_activity_log_at ON activity_log(at)`,
     `CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_clock_sessions_rep ON clock_sessions(rep_id)`,
-    // The runaway-session sweep scans open sessions only; without this it
-    // walks the whole table every hour.
-    `CREATE INDEX IF NOT EXISTS idx_clock_sessions_open ON clock_sessions(clocked_out)`,
     `CREATE INDEX IF NOT EXISTS idx_location_pings_rep ON location_pings(rep_id, ping_at)`,
     `CREATE INDEX IF NOT EXISTS idx_commissions_rep ON commissions(rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_knocked_at ON knock_log(knocked_at)`,
