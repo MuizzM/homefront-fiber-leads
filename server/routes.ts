@@ -8895,7 +8895,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const scope = req.user?.isSuperAdmin === 1 ? null : (req.user?.tenantId ?? -1);
     try {
       if (req.query.summary === "1") return res.json({ summary: storage.getLoginAttemptSummary(scope) });
-      res.json({ attempts: storage.getLoginAttempts(limit, email || undefined, scope) });
+      const attempts = storage.getLoginAttempts(limit, email || undefined, scope);
+      // Platform authority is immutable: tenant viewers never see NULL-tenant
+      // rows (probes or otherwise) over HTTP, even though the storage-level
+      // org list retains them for diagnostics.
+      res.json({ attempts: scope === null ? attempts : attempts.filter((a: any) => a.tenant_id != null) });
     } catch (e: any) {
       console.error("[login-attempts] read failed:", e?.message);
       res.status(500).json({ error: "Audit read failed" });

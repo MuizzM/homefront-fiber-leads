@@ -6239,7 +6239,11 @@ export class Storage implements IStorage {
     const args: any[] = [];
     if (email) { where.push("email = ?"); args.push(String(email).toLowerCase()); }
     if (tenantId != null) {
-      where.push("tenant_id = ?");
+      // Org-facing list keeps NULL-tenant rows so genuine mistyped logins stay
+      // visible; only synthetic probe identities are filtered out. The HTTP
+      // route re-strips NULL rows for tenant viewers (summary view is already
+      // strict) so platform-authority scoping holds at every API surface.
+      where.push("(tenant_id = ? OR tenant_id IS NULL)");
       args.push(tenantId);
       where.push(Storage.DIAGNOSTIC_EMAIL_FILTER);
     }
