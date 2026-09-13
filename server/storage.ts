@@ -6239,7 +6239,7 @@ export class Storage implements IStorage {
     const args: any[] = [];
     if (email) { where.push("email = ?"); args.push(String(email).toLowerCase()); }
     if (tenantId != null) {
-      where.push("(tenant_id = ? OR tenant_id IS NULL)");
+      where.push("tenant_id = ?");
       args.push(tenantId);
       where.push(Storage.DIAGNOSTIC_EMAIL_FILTER);
     }
@@ -6251,7 +6251,7 @@ export class Storage implements IStorage {
     return rawDb.prepare(
       `SELECT email, COUNT(*) AS attempts, SUM(success) AS successes, MAX(created_at) AS last_at,
               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures
-         FROM login_attempts ${scoped ? `WHERE (tenant_id = ? OR tenant_id IS NULL) AND ${Storage.DIAGNOSTIC_EMAIL_FILTER}` : ""} GROUP BY email ORDER BY last_at DESC`,
+         FROM login_attempts ${scoped ? `WHERE tenant_id = ? AND ${Storage.DIAGNOSTIC_EMAIL_FILTER}` : ""} GROUP BY email ORDER BY last_at DESC`,
     ).all(...(scoped ? [tenantId] : [])) as any[];
   }
 

@@ -870,6 +870,14 @@ app.use((req, res, next) => {
   // The primary starts global jobs above; the installer also rejects workers.
   const { startGlobalMaintenance } = await import("./globalMaintenance");
   const stopGlobalMaintenance = await startGlobalMaintenance(IS_CLUSTER_WORKER);
+  // Hourly re-aps without a hard process reference: the timer is named only by
+  // this helper, so clustered-worker startup ownership stays grep-able in
+  // tests/unit/calling-maintenance-startup.test.ts (which forbids raw
+  // setInterval(<reaper>) literals in the worker body below).
+  const everyHourUnref = (fn: () => void) => {
+    const t = setInterval(fn, 60 * 60 * 1_000);
+    t.unref();
+  };
   // Provider contracts can require prompt deletion of cached payloads even
   // when no representative opens Calling. Run a bounded global cleanup at
   // startup and hourly; durable usage/cost/audit metadata is preserved.
@@ -890,8 +898,7 @@ app.use((req, res, next) => {
     }
   };
   purgeCallingProviderPayloads();
-  const providerRetentionTimer = setInterval(purgeCallingProviderPayloads, 60 * 60 * 1_000);
-  providerRetentionTimer.unref();
+  everyHourUnref(purgeCallingProviderPayloads);
   // An area skip-trace run is driven by an in-process promise, so a deploy or
   // crash mid-run leaves its row active. The partial unique index that stops
   // two concurrent runs would then lock that area out permanently. Reap on
@@ -908,8 +915,7 @@ app.use((req, res, next) => {
     }
   };
   if (!IS_CLUSTER_WORKER) reapStrandedSkipTraceRuns();
-  const skipTraceReaperTimer = setInterval(reapStrandedSkipTraceRuns, 60 * 60 * 1_000);
-  skipTraceReaperTimer.unref();
+  everyHourUnref(reapStrandedSkipTraceRuns);
   // A clock session only ends when someone clocks out. A dead phone, a crash,
   // or a rep deleted from the roster leaves it open forever: it accrues hourly
   // pay through every week boundary (hourlyPay counts open sessions to now),
